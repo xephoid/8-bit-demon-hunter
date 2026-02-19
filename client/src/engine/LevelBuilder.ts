@@ -133,6 +133,14 @@ export class LevelBuilder {
                 sprite.scale.set(this.tileSize * 2, this.tileSize * 2, 1);
                 this.meshes.push(sprite);
                 this.scene.add(sprite);
+
+                // Town Name Label
+                if (door.targetName) {
+                    const label = this.createNameLabel(door.targetName);
+                    label.position.set(door.x * this.tileSize, 5, door.y * this.tileSize); // Higher up
+                    this.meshes.push(label);
+                    this.scene.add(label);
+                }
             });
         }
     }
@@ -143,5 +151,40 @@ export class LevelBuilder {
             // Optional: Dispose geometries/materials if needed for memory
         });
         this.meshes = [];
+    }
+
+    private createNameLabel(text: string): THREE.Sprite {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return new THREE.Sprite();
+
+        const fontSize = 24;
+        ctx.font = `bold ${fontSize}px monospace`;
+        const textWidth = ctx.measureText(text).width;
+
+        canvas.width = textWidth + 20;
+        canvas.height = fontSize + 10;
+
+        // Re-set font after resize
+        ctx.font = `bold ${fontSize}px monospace`;
+        ctx.fillStyle = "#FFD700"; // Gold
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+
+        ctx.shadowColor = 'black';
+        ctx.shadowBlur = 4;
+        ctx.lineWidth = 3;
+        ctx.strokeText(text, canvas.width / 2, canvas.height / 2);
+        ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+
+        const texture = new THREE.CanvasTexture(canvas);
+        texture.minFilter = THREE.LinearFilter;
+
+        const material = new THREE.SpriteMaterial({ map: texture, transparent: true });
+        const sprite = new THREE.Sprite(material);
+
+        const scale = 0.05;
+        sprite.scale.set(canvas.width * scale, canvas.height * scale, 1);
+        return sprite;
     }
 }

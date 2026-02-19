@@ -85,8 +85,8 @@ export interface Person {
     attributes: PersonAttributes;
     isDemon: boolean;
     clues: {
-        good: Clue;
-        bad: Clue;
+        good?: Clue;
+        bad?: Clue;
     };
     visualClue: string; // A lie if demon
     task: GameTask;

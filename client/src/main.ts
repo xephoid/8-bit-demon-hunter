@@ -6,7 +6,9 @@ import { LevelBuilder } from './engine/LevelBuilder';
 import { EntityManager } from './engine/EntityManager';
 import { Controls } from './engine/Controls';
 import { DialogueUI } from './ui/DialogueUI';
-import type { GameTask, Person } from '../../shared/src/data/GameData';
+import { ClueTrackerUI } from './ui/ClueTrackerUI';
+import { MinimapUI } from './ui/MinimapUI';
+import type { GameTask, Person, Clue } from '../../shared/src/data/GameData';
 
 const init = async () => {
   // 1. Setup Renderer
@@ -36,6 +38,18 @@ const init = async () => {
 
     // 2. Build New
     builder.build(worldData);
+
+    // Merge global state (hasMet) into new entities
+    if (worldData.entities) {
+      worldData.entities.forEach((e: any) => {
+        if (e.type === 'person' && e.properties && e.properties.personId) {
+          if (playerState.visitedPeople.has(e.properties.personId)) {
+            e.properties.hasMet = true;
+          }
+        }
+      });
+    }
+
     entityManager.spawnEntities(worldData.entities);
 
     // 3. Spawn Player at SpawnPoint
@@ -74,7 +88,9 @@ const init = async () => {
     isDead: false,
     invulnTimer: 0,
     activeTask: null as GameTask | null,
-    knownClues: [] as string[]
+    knownClues: [] as Clue[],
+    visitedPeople: new Map<string, Person>(), // Track people met globally
+    inventory: [] as string[]
   };
 
   // --- ATTACK LOGIC ---
@@ -106,10 +122,13 @@ const init = async () => {
   arrowMesh.rotation.x = Math.PI / 2; // Point forward? No, Cone points up Y by default. 
   // We want it to point at target. lookAt points Z axis. 
   // If we rotate cone to point along Z...
-  arrowMesh.geometry.rotateX(Math.PI / 2); // Point along Z
+  arrowMesh.geometry.rotateX(-Math.PI / 2); // Point along -Z (Away from camera? No wait, towards Z- if lookAt aligns -Z)
   scene.add(arrowMesh);
 
   document.addEventListener('mousedown', () => {
+    // Check UI state
+    if (dialogueUI.isOpen || clueTracker.isOpen) return;
+
     // Check if we have ANY pointer lock (don't care if body or canvas)
     if (document.pointerLockElement && !attackState.isAttacking && !playerState.isDead) {
       // SLASH
@@ -214,8 +233,26 @@ const init = async () => {
   dialogueUI.onCompleteTask = (person: Person) => {
     console.log("Completed Task for:", person.name);
     playerState.activeTask = null; // Clear active task
-    // Grant Clue (handled in UI display mostly, but we should store it in state?)
-    // For now, UI shows it.
+
+    // Grant Clue (Good AND Bad)
+    if (person.clues) {
+      // Good Clue
+      if (person.clues.good) {
+        const clue = person.clues.good;
+        if (!playerState.knownClues.some(c => c.text === clue.text)) {
+          playerState.knownClues.push(clue);
+          console.log("Good Clue Added:", clue);
+        }
+      }
+      // Bad Clue (User Request)
+      if (person.clues.bad) {
+        const clue = person.clues.bad;
+        if (!playerState.knownClues.some(c => c.text === clue.text)) {
+          playerState.knownClues.push(clue);
+          console.log("Bad Clue Added:", clue);
+        }
+      }
+    }
   };
 
   // Close Handler
@@ -242,16 +279,54 @@ const init = async () => {
     }
   };
 
+  // --- MINIMAP ---
+  const minimap = new MinimapUI();
+
+  // --- CLUE TRACKER ---
+  const clueTracker = new ClueTrackerUI(assetManager);
+
+  // Toggle Clue Tracker
+  window.addEventListener('keydown', (e) => {
+    if (e.code === 'KeyC') {
+      // Use global state
+      const knownPeople = Array.from(playerState.visitedPeople.values());
+
+      if (clueTracker.isOpen) {
+        clueTracker.hide();
+        controls.lock();
+      } else {
+        controls.unlock();
+        clueTracker.show(knownPeople, playerState.knownClues);
+      }
+    }
+  });
+
   const animate = () => {
     requestAnimationFrame(animate);
 
     const delta = clock.getDelta(); // Always consume time to prevent jump on unpause
     updateTaskHud(); // Keep HUD updated
 
+    // Minimap Update
+    if (currentWorldData) {
+      // Player Pos in Grid Coords
+      const pp = { x: renderer.camera.position.x / 2, y: renderer.camera.position.z / 2 };
+
+      minimap.update(
+        pp,
+        { width: currentWorldData.width, height: currentWorldData.height },
+        currentWorldData.doors || [],
+        entityManager.activeEntities,
+        playerState.activeTask,
+        playerState.visitedPeople,
+        (currentWorldData.customId || currentWorldData.id).toString()
+      );
+    }
+
     const pauseScreen = document.getElementById('pause-screen');
     const isLocked = document.pointerLockElement !== null;
 
-    if (dialogueUI.isOpen) {
+    if (dialogueUI.isOpen || clueTracker.isOpen) {
       // DIALOGUE MODE: Logic Paused, Cursor Free, UI Visible
       if (pauseScreen) pauseScreen.style.display = 'none';
 
@@ -264,14 +339,13 @@ const init = async () => {
       if (pauseScreen) pauseScreen.style.display = 'flex';
       renderer.render();
       return;
-    } else {
-      // PLAY MODE
-      if (pauseScreen) pauseScreen.style.display = 'none';
     }
 
-    if (!playerState.isDead) {
-      controls.update(delta);
-    }
+    // GAME LOOP
+    if (pauseScreen) pauseScreen.style.display = 'none';
+
+    // 1. Controls (Movement)
+    if (!playerState.isDead) controls.update(delta, currentWorldData);
 
     // Update Attack Visual
     if (attackState.isAttacking) {
@@ -290,13 +364,14 @@ const init = async () => {
 
       if (targetEntity) {
         arrowMesh.visible = true;
-        arrowMesh.position.copy(renderer.camera.position);
-        arrowMesh.position.y += 2; // Above head
+        // Position ABOVE the target entity
+        arrowMesh.position.copy(targetEntity.sprite.position);
+        arrowMesh.position.y += 2.5; // Float above head
 
+        // Point DOWN at the entity
         arrowMesh.lookAt(targetEntity.sprite.position);
       } else {
         // TODO: Point to the town they are in? 
-        // For now, hide if not in same room
         arrowMesh.visible = false;
       }
     } else {
@@ -313,6 +388,8 @@ const init = async () => {
 
 
 
+
+
   // Interaction Listener
   window.addEventListener('playerInteract', async (e: any) => {
     const playerPos = e.detail.position;
@@ -325,6 +402,27 @@ const init = async () => {
 
       // Cast properties to Person (assuming WorldGenerator passes full data)
       const person = npcEntity.properties as Person;
+      person.hasMet = true; // Mark as met locally
+
+      // Update global visited registry
+      if (!playerState.visitedPeople.has(person.id)) {
+        playerState.visitedPeople.set(person.id, person);
+      } else {
+        // Update existing record (e.g. task status changes)
+        playerState.visitedPeople.set(person.id, person);
+      }
+
+      // Automatically add "Bad Clue" (Rumor) to known clues on meeting
+      if (person.clues && person.clues.bad) {
+        const rumor = person.clues.bad;
+        if (!playerState.knownClues.some(c => c.text === rumor.text)) {
+          playerState.knownClues.push(rumor);
+          console.log("Rumor collected:", rumor);
+        }
+      }
+
+      // Update Label Color
+      entityManager.updatePersonLabel(person.id, true);
 
       // Check if person is the one we have a task for
       // And update the Person object in real-time if needed?
@@ -354,6 +452,11 @@ const init = async () => {
 
           // LOAD NEW WORLD WITHOUT RELOAD
           await loadWorld(newWorld);
+
+          // Refill HP (User Request)
+          playerState.hp = playerState.maxHp;
+          updateHealthUI();
+          console.log("HP Refilled!");
 
         } catch (err) {
           console.error(err);

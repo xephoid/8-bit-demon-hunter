@@ -1,6 +1,7 @@
 import mongoose, { Schema, Document } from 'mongoose';
 
 export interface IWorld extends Document {
+    customId: string;
     width: number;
     height: number;
     type: 'world' | 'city';
@@ -12,6 +13,7 @@ export interface IWorld extends Document {
 }
 
 const WorldSchema: Schema = new Schema({
+    customId: { type: String }, // Logical ID (town_0, world_main)
     width: { type: Number, required: true },
     height: { type: Number, required: true },
     type: { type: String, default: 'world' },

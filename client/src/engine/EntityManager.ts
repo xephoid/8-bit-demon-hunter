@@ -29,6 +29,10 @@ export class EntityManager {
     private aliveEntities: EntityState[] = [];
     private currentWalls: boolean[][] | null = null;
 
+    public get activeEntities(): EntityData[] {
+        return this.aliveEntities.map(e => e.data);
+    }
+
     private projectiles: any[] = [];
     private dummyTexture: THREE.Texture;
 
@@ -62,6 +66,10 @@ export class EntityManager {
         let texture;
         if (data.properties && data.properties.sprite) {
             texture = this.assetManager.getTexture(data.properties.sprite);
+            // If direct resolution fails, try resolving as a Character Base ID (e.g. "character_0")
+            if (!texture && data.properties.sprite.startsWith("character_")) {
+                texture = this.assetManager.getTexture(`${data.properties.sprite}_2`); // Default to Down (2)
+            }
         } else {
             texture = this.getTextureForState(data.type, 'down', 0);
         }
@@ -76,6 +84,13 @@ export class EntityManager {
             );
             sprite.scale.set(1.5, 1.5, 1);
 
+            // --- NPC LABEL LOGIC ---
+            if (data.type === 'person') {
+                const label = this.createNameLabel(data.name, data.properties.hasMet ? '#888888' : '#ffffff');
+                label.position.set(0, 1.2, 0); // Above head
+                sprite.add(label); // Attach to parent sprite
+            }
+
             this.entities.add(sprite);
             this.aliveEntities.push({
                 sprite,
@@ -87,6 +102,56 @@ export class EntityManager {
                     isMoving: false
                 }
             });
+        }
+    }
+
+    private createNameLabel(text: string, color: string): THREE.Sprite {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return new THREE.Sprite(); // Fail safe
+
+        const fontSize = 24;
+        ctx.font = `bold ${fontSize}px monospace`;
+        const textWidth = ctx.measureText(text).width;
+
+        canvas.width = textWidth + 10;
+        canvas.height = fontSize + 10;
+
+        // Re-set font after resize
+        ctx.font = `bold ${fontSize}px monospace`;
+        ctx.fillStyle = color;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+
+        // Shadow for readability
+        ctx.shadowColor = 'black';
+        ctx.shadowBlur = 4;
+        ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+
+        const texture = new THREE.CanvasTexture(canvas);
+        texture.minFilter = THREE.LinearFilter;
+
+        const material = new THREE.SpriteMaterial({ map: texture, transparent: true });
+        const sprite = new THREE.Sprite(material);
+
+        // Scale down to world units
+        const scale = 0.02; // Adjust based on preference
+        sprite.scale.set(canvas.width * scale, canvas.height * scale, 1);
+
+        return sprite;
+    }
+
+    public updatePersonLabel(personId: string, hasMet: boolean) {
+        const entityState = this.aliveEntities.find(e => e.data.properties.personId === personId);
+        if (entityState && entityState.sprite.children.length > 0) {
+            // Assume child 0 is label
+            const oldLabel = entityState.sprite.children[0];
+            entityState.sprite.remove(oldLabel);
+
+            // Recreate with new color
+            const newLabel = this.createNameLabel(entityState.data.name, hasMet ? '#888888' : '#ffffff');
+            newLabel.position.set(0, 1.2, 0);
+            entityState.sprite.add(newLabel);
         }
     }
 
@@ -648,44 +713,53 @@ export class EntityManager {
                             if (newTex) entity.sprite.material.map = newTex;
                         } else if (entity.data.type === 'person') {
                             // Manual Person Animation
-                            // properties.sprite is like "character_X_Y"
-                            // Assumed: Y=0(Down), 1=Left, 2=Right, 3=Up
+                            // properties.sprite is like "character_X" (Base ID)
+                            // Textures are: 
+                            // character_X_0 = Back (Up)
+                            // character_X_1 = Side (Right) -> Flip for Left
+                            // character_X_2 = Front (Down)
+
                             const match = entity.data.properties.sprite.match(/character_(\d+)/);
                             if (match) {
                                 const charId = match[1];
-                                let dirIdx = 0;
-                                let flip = false;
+                                let dirIdx = 2; // Default Down
 
-                                if (entity.anim.direction === 'down') dirIdx = 0;
-                                else if (entity.anim.direction === 'up') dirIdx = 3;
-                                else {
-                                    // Side
+                                if (entity.anim.direction === 'up') {
+                                    dirIdx = 0;
+                                } else if (entity.anim.direction === 'side') {
+                                    dirIdx = 1;
                                     // Check explicit side from scale or velocity?
-                                    // We already set scale.x in the block above based on sideComp
-                                    if (entity.sprite.scale.x < 0) {
-                                        dirIdx = 1; // Left
-                                        flip = false; // Don't flip since we have a Left sprite
-                                    } else {
-                                        dirIdx = 2; // Right
-                                        flip = false;
-                                    }
+                                    // Scale was already set in the movement block:
+                                    // if sideComp < 0 (LEFT), scale.x is NEGATIVE.
+                                    // if sideComp > 0 (RIGHT), scale.x is POSITIVE.
 
-                                    // Hack: If we don't have separate L/R, we might use one and flip.
-                                    // But assuming we have 4 rows.
+                                    // If we use specific Side sprite (Right-facing):
+                                    // Left Move (Negative Scale) -> Flips Right Sprite -> Looks Left. CORRECT.
+                                    // Right Move (Positive Scale) -> Normal Right Sprite -> Looks Right. CORRECT.
+
+                                    // So we just need to ensure scale is correct in movement block (it is).
+                                    // And here we just select idx 1.
+                                } else {
+                                    // Down
+                                    dirIdx = 2;
                                 }
 
                                 const key = `character_${charId}_${dirIdx}`;
                                 const newTex = this.assetManager.getTexture(key);
                                 if (newTex) {
                                     entity.sprite.material.map = newTex;
-                                    // Fix scale if we were flipping but now have real sprite
-                                    // If we are Left (scale < 0) and we use Left sprite, we should usually NOT flip (scale > 0).
-                                    // Unless Left sprite is actually Right sprite?
-                                    // Standard: 1=Left, 2=Right.
-                                    // So if using 1, keep scale positive?
-                                    // The previous block forcing scale.x = -abs() for Left will flip the Left sprite!
-                                    // We need to un-flip it here.
-                                    if (entity.sprite.scale.x < 0) entity.sprite.scale.x = Math.abs(entity.sprite.scale.x);
+                                    // Scale control is handled in movement block, 
+                                    // but we need to ensure UP/DOWN are not flipped?
+                                    // Actually, if we moved Left, scale is -1.
+                                    // If we then stop, or move Down...
+                                    // Down sprite should probably not be flipped?
+                                    // Usually Down/Up sprites are symmetric, so flipping doesn't matter much, 
+                                    // BUT if they have handedness (holding item), it does.
+                                    // For now, let's reset scale if not side?
+
+                                    if (entity.anim.direction !== 'side') {
+                                        entity.sprite.scale.x = Math.abs(entity.sprite.scale.x);
+                                    }
                                 }
                             }
                         }

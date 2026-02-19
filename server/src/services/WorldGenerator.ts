@@ -52,9 +52,10 @@ export class WorldGenerator {
         GameState.setState(state);
 
         // Return the MAIN WORLD (Overworld) acting as the hub
+        // Return the MAIN WORLD (Overworld) acting as the hub
         // Pass the town IDs so the overworld creates doors to them
-        const townIds = towns.map(t => t.id);
-        return this.generateSimpleWorld(townIds);
+        const townDetails = towns.map(t => ({ id: t.id, name: t.name }));
+        return this.generateSimpleWorld(townDetails);
     }
 
     public convertTownToWorld(town: Town): IWorld {
@@ -77,6 +78,7 @@ export class WorldGenerator {
         }));
 
         return new World({
+            customId: town.id,
             width: townData.width,
             height: townData.height,
             type: 'city',
@@ -92,20 +94,36 @@ export class WorldGenerator {
         const people = this.generatePeople(id, 10);
 
         // Add people to entities list
-        const entities = people.map(p => ({
-            type: 'person',
-            name: p.name,
-            x: Math.floor(Math.random() * 30) + 5,
-            y: Math.floor(Math.random() * 30) + 5,
-            properties: {
-                ...p, // Full Person Data
+        const entities = people.map(p => {
+            let placed = false;
+            let attempts = 0;
+            let ex = 10;
+            let ey = 10;
 
-                // Overrides/Extras
-                personId: p.id,
-                sprite: p.sprite,
-                hp: 100,
+            while (!placed && attempts < 50) {
+                ex = Math.floor(Math.random() * (townData.width - 2)) + 1;
+                ey = Math.floor(Math.random() * (townData.height - 2)) + 1;
+
+                // Check Wall
+                if (!townData.walls[ex][ey]) {
+                    placed = true;
+                }
+                attempts++;
             }
-        }));
+
+            return {
+                type: 'person',
+                name: p.name,
+                x: ex,
+                y: ey,
+                properties: {
+                    ...p, // Full Person Data
+                    personId: p.id,
+                    sprite: p.sprite,
+                    hp: 100,
+                }
+            };
+        });
 
         return new World({
             width: townData.width,
@@ -141,19 +159,23 @@ export class WorldGenerator {
             const task = this.generateKillTask(townId, i, monsterType);
             task.giverId = personId;
 
+            // Character Sprites (0-7 available)
+            // ensuring uniqueness per town
+            const spriteId = i % 8; // Iterate through 0-7, repeat if needed (towns have 10 people)
+
             people.push({
                 id: personId,
                 name: `Person ${i}`,
-                sprite: `character_${Math.floor(Math.random() * 8)}_${Math.floor(Math.random() * 4)}`,
+                sprite: `character_${spriteId}`, // Base sprite ID
                 attributes: {
                     occupation: occupations[i % occupations.length],
-                    pet: Pet.Dog, // TODO: Randomize
-                    color: Color.Red, // TODO: Randomize
-                    item: "item_id", // TODO: Generate items
+                    pet: Object.values(Pet)[Math.floor(Math.random() * Object.values(Pet).length)] as Pet,
+                    color: Object.values(Color)[Math.floor(Math.random() * Object.values(Color).length)] as Color,
+                    item: `item_${Math.floor(Math.random() * 5)}`, // Simple item ID generation
                     townId: townId
                 },
                 isDemon: false,
-                clues: { good: { text: "...", isGood: true }, bad: { text: "...", isGood: false } },
+                clues: {},
                 visualClue: "None",
                 task: task,
                 hasMet: false,
@@ -236,7 +258,7 @@ export class WorldGenerator {
         };
     }
 
-    public async generateSimpleWorld(townIds: string[] = []): Promise<IWorld> {
+    public async generateSimpleWorld(townDetails: { id: string, name: string }[] = []): Promise<IWorld> {
         // 1. Initialize walls
         const walls: boolean[][] = Array(this.width).fill(null).map(() => Array(this.height).fill(true));
 
@@ -244,8 +266,8 @@ export class WorldGenerator {
         const cities: { x: number, y: number }[] = [];
 
         // 2. Place Cities (Rooms)
-        // If townIds provided, generate exactly that many rooms. Otherwise default to config.
-        const numCities = townIds.length > 0 ? townIds.length : gameConfig.world.roomCount;
+        // If townDetails provided, generate exactly that many rooms. Otherwise default to config.
+        const numCities = townDetails.length > 0 ? townDetails.length : gameConfig.world.roomCount;
 
         for (let i = 0; i < numCities; i++) {
             const doorX = Math.floor(Math.random() * (this.width - 20)) + 10;
@@ -256,12 +278,15 @@ export class WorldGenerator {
 
             // Place Door
             // Use target as ID so client sends the town ID directly
-            const target = townIds.length > 0 ? townIds[i] : `world_${i}`;
+            const town = townDetails.length > 0 ? townDetails[i] : { id: `world_${i}`, name: `Town ${i + 1}` };
+            const target = town.id;
+
             doors.push({
                 x: doorX,
                 y: doorY,
                 id: target,
-                target: target
+                target: target,
+                targetName: town.name // Pass name to client
             });
         }
 
@@ -330,6 +355,7 @@ export class WorldGenerator {
         }
 
         const world = new World({
+            customId: 'world_main',
             width: this.width,
             height: this.height,
             type: 'world',

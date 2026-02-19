@@ -61,7 +61,7 @@ canvas {
   font-size: 80px;
   pointer-events: all;
   /* Blocks clicks */
-  z-index: 20;
+  z-index: 5; /* Lower than Dialogue (100) */
   display: none;
   /* Hidden by default */
 }
