@@ -1,0 +1,67 @@
+body {
+  margin: 0;
+  overflow: hidden;
+  /* Hide scrollbars */
+  background-color: #000;
+}
+
+canvas {
+  display: block;
+}
+
+#ui-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  /* Let clicks pass through to canvas */
+  z-index: 10;
+}
+
+#health-display {
+  position: absolute;
+  top: 20px;
+  left: 20px;
+  font-size: 48px;
+  color: red;
+  text-shadow: 2px 2px 0 #000;
+  font-family: sans-serif;
+}
+
+#task-hud {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  font-family: 'Press Start 2P', monospace;
+  color: white;
+  font-size: 16px;
+  text-align: right;
+  text-shadow: 2px 2px 0 #000;
+  white-space: pre-wrap;
+  max-width: 300px;
+  display: block;
+  /* Always visible block */
+}
+
+#pause-screen {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.5);
+  /* Greyed out */
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  color: white;
+  font-family: 'Press Start 2P', cursive;
+  font-size: 80px;
+  pointer-events: all;
+  /* Blocks clicks */
+  z-index: 20;
+  display: none;
+  /* Hidden by default */
+}

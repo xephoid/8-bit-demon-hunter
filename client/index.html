@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Miniburger TS</title>
+  <script>
+    window.onerror = function (message, source, lineno, colno, error) {
+      document.body.innerHTML += `<div style="color: red; padding: 20px; font-family: monospace; background: white; position: absolute; top: 0; left: 0; z-index: 9999;">
+            <h1>Global Error</h1>
+            <pre>${message}\n${source}:${lineno}:${colno}</pre>
+        </div>`;
+    };
+  </script>
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+</head>
+
+<body>
+  <div id="app"></div>
+  <div id="ui-layer">
+    <div id="health-display">❤️❤️❤️❤️❤️❤️❤️❤️❤️❤️</div>
+    <div id="task-hud"></div>
+    <div id="pause-screen">PAUSE</div>
+  </div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+
+</html>
