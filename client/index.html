@@ -3,7 +3,6 @@
 
 <head>
   <meta charset="UTF-8" />
-  <link rel="icon" type="image/svg+xml" href="/vite.svg" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Miniburger TS</title>
   <script>
@@ -20,9 +19,23 @@
 <body>
   <div id="app"></div>
   <div id="ui-layer">
-    <div id="health-display">❤️❤️❤️❤️❤️❤️❤️❤️❤️❤️</div>
-    <div id="task-hud"></div>
+    <div id="health-display" style="font-family: 'Press Start 2P', monospace; text-shadow: 2px 2px 0 #000;">❤️❤️❤️❤️❤️
+    </div>
+    <div id="xp-display"
+      style="font-family: 'Press Start 2P', monospace; text-shadow: 2px 2px 0 #000; font-size: 14px; margin-top: 5px;">
+      XP: 0/4</div>
+    <div id="location-display"
+      style="position: absolute; bottom: 20px; left: 20px; color: white; font-family: 'Press Start 2P', monospace; font-size: 16px; text-shadow: 2px 2px 0 #000;">
+      Loading...</div>
+    <div id="task-hud">LOADING TASKS...</div>
     <div id="pause-screen">PAUSE</div>
+    <div id="death-screen">
+      <div id="death-title">You Died</div>
+      <div id="death-buttons">
+        <button class="death-btn" id="btn-new-game">New Game</button>
+        <button class="death-btn" id="btn-continue">Continue</button>
+      </div>
+    </div>
   </div>
   <script type="module" src="/src/main.ts"></script>
 </body>

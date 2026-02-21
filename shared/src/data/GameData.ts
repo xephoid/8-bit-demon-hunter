@@ -75,6 +75,7 @@ export interface PersonAttributes {
 export interface Clue {
     text: string;
     isGood: boolean; // true = constraint (e.g. "Demon is a Baker"), false = negation (e.g. "Demon is NOT a Baker")
+    isSpecial?: boolean; // true = occupation power clue, shown in blue in tracker
     relatedAttribute?: { key: keyof PersonAttributes, value: string };
 }
 
@@ -84,6 +85,7 @@ export interface Person {
     sprite: string;
     attributes: PersonAttributes;
     isDemon: boolean;
+    isMinion?: boolean;
     clues: {
         good?: Clue;
         bad?: Clue;

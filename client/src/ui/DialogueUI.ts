@@ -1,15 +1,16 @@
 import type { Person, GameTask } from '../../../shared/src/data/GameData';
+import { OccupationConfig, Dialogue } from '../data/dialogue';
 
 export class DialogueUI {
     private container: HTMLElement;
     private nameEl: HTMLElement;
-    private infoEl: HTMLElement; // New element for attributes
+    private infoEl: HTMLElement;
     private textEl: HTMLElement;
     private optionsEl: HTMLElement;
 
     // Callbacks
     public onAcceptTask: ((task: GameTask) => void) | null = null;
-    public onCompleteTask: ((person: Person, rewardType: 'ITEM' | 'CLUE') => void) | null = null;
+    public onCompleteTask: ((person: Person, rewardType: 'CLUE' | 'POWER') => string | void) | null = null;
     public onClose: (() => void) | null = null;
 
     constructor() {
@@ -20,14 +21,14 @@ export class DialogueUI {
             bottom: '20px',
             left: '50%',
             transform: 'translateX(-50%)',
-            width: '800px', // Increased width for 2 columns
+            width: '800px',
             backgroundColor: 'rgba(0, 0, 0, 0.9)',
             border: '2px solid white',
             padding: '20px',
             color: 'white',
             fontFamily: '"Press Start 2P", monospace',
             display: 'none',
-            flexDirection: 'row', // Horizontal layout
+            flexDirection: 'row',
             gap: '20px',
             zIndex: '100',
             boxShadow: '0 0 10px rgba(0,0,0,0.5)'
@@ -56,7 +57,7 @@ export class DialogueUI {
         this.optionsEl = document.createElement('div');
         this.optionsEl.style.display = 'flex';
         this.optionsEl.style.gap = '10px';
-        this.optionsEl.style.marginTop = 'auto'; // Push to bottom
+        this.optionsEl.style.marginTop = 'auto';
         leftCol.appendChild(this.optionsEl);
 
         // --- Right Column (Attributes) ---
@@ -79,67 +80,57 @@ export class DialogueUI {
 
     public isOpen: boolean = false;
 
-    public show(person: Person, activeTask: GameTask | null) {
+    private getPowerLabel(person: Person): string {
+        if (person.isMinion) return 'Hear Confession';
+        return OccupationConfig[person.attributes.occupation]?.powerLabel ?? 'Use Power';
+    }
+
+    private getPowerOffer(person: Person): string {
+        if (person.isMinion) return "I have something to confess.";
+        return OccupationConfig[person.attributes.occupation]?.powerOffer ?? "use my ability";
+    }
+
+    public show(person: Person, activeTask: GameTask | null, items: any[], towns: any[]) {
         this.container.style.display = 'flex';
-        this.isOpen = true; // Set Open State
+        this.isOpen = true;
         this.nameEl.innerText = `${person.name} the ${person.attributes.occupation}`;
 
-        // Populate Info
-        const infoText = `Attributes:
-Pet: ${person.attributes.pet} | Color: ${person.attributes.color} | Item: ${person.attributes.item || "None"}
-Town: ${person.attributes.townId}
-
-Rumor: "${person.clues.bad.text}"`;
-        this.infoEl.innerText = infoText;
+        // Populate attribute info panel
+        const itemName = items.find(i => i.id === person.attributes.item)?.name || person.attributes.item || "None";
+        const townName = towns?.find(t => t.id === person.attributes.townId)?.name || person.attributes.townId;
+        this.infoEl.innerText = Dialogue.attributePanel(
+            person.attributes.pet,
+            person.attributes.color,
+            itemName,
+            townName,
+            person.clues?.bad?.text ?? Dialogue.noClue
+        );
 
         this.optionsEl.innerHTML = '';
-        this.textEl.innerHTML = ''; // Clear text
+        this.textEl.innerHTML = '';
 
         const addButton = (text: string, onClick: () => void) => this.addButton(text, onClick);
-
-        // Logic flow
-        let foundTarget = false;
 
         // 0. Check if this person IS the target of a FIND task
         if (activeTask && !activeTask.isCompleted) {
             if (activeTask.type === 'FIND_PERSON' || activeTask.type === 'FIND_ITEM') {
-                // Check match
                 let match = false;
-                if (activeTask.targetId === person.id) match = true; // Direct ID match
-                if (activeTask.targetId === person.attributes.occupation) match = true; // Occupation match
-                if (activeTask.targetId === person.attributes.pet) match = true; // Pet match
-                if (activeTask.targetId === person.attributes.color) match = true; // Color match
-                if (activeTask.type === 'FIND_ITEM' && activeTask.targetId === person.attributes.item) match = true; // Item match
+                if (activeTask.targetId === person.id) match = true;
+                if (activeTask.targetId === person.attributes.occupation) match = true;
+                if (activeTask.targetId === person.attributes.pet) match = true;
+                if (activeTask.targetId === person.attributes.color) match = true;
+                if (activeTask.type === 'FIND_ITEM' && activeTask.targetId === person.attributes.item) match = true;
 
                 if (match) {
-                    foundTarget = true;
-                    this.textEl.innerText = `You found me! I am indeed the one you are looking for (${activeTask.description}).`;
-                    addButton("I found you!", () => {
-                        // We need to mark task as complete.
-                        // We don't have direct access to set task completed here, but we can assume the callback handles it?
-                        // Actually, we should call a specific callback or reuse onAccept/onComplete?
-                        // onCompleteTask is currently for the GIVER.
-                        // We need a way to tell the system "Task Progressed/Completed".
-                        // For "Find" tasks, finding them IS completion.
-
-                        // Hack: Mutate activeTask here? Or emit event?
-                        // Ideally we'd have a callback onFindTarget(task, person)
-                        // For now, let's just use a custom event or update the task directly if it's passed by reference (it is).
+                    this.textEl.innerText = Dialogue.foundTarget(activeTask.description);
+                    addButton(Dialogue.buttons.iFoundYou, () => {
                         activeTask.currentAmount = activeTask.amount;
                         activeTask.isCompleted = true;
-
-                        // Refresh UI to show "Task Completed" state (which is usually handled by Giver)
-                        // But Find tasks might be "Return to Giver" after finding?
-                        // README: "Find a person ... and tell them about it" (implies return to person?)
-                        // "Find a person ... and return to the person"
-
-                        // So we just update progress here. User must still return to giver.
-                        this.textEl.innerText = "Thanks for finding me. Please let the quest giver know.";
+                        this.textEl.innerText = Dialogue.foundConfirmed;
                         this.optionsEl.innerHTML = '';
-                        addButton("Goodbye", () => this.hide());
+                        addButton(Dialogue.buttons.goodbye, () => this.hide());
                     });
-
-                    return; // Exit other logic
+                    return;
                 }
             }
         }
@@ -147,74 +138,85 @@ Rumor: "${person.clues.bad.text}"`;
         // 1. If person gave the active task -> Check status
         if (activeTask && activeTask.giverId === person.id) {
             if (activeTask.isCompleted) {
-                this.textEl.innerText = "You did it! You are a true hero.";
-                this.textEl.innerText = "You did it! You are a true hero.";
+                // Minion reveals themselves instead of giving a reward
+                if (person.isMinion) {
+                    this.textEl.innerText = Dialogue.powers.minionReveal;
+                    if (this.onCompleteTask) this.onCompleteTask(person, 'POWER');
+                    addButton(Dialogue.buttons.goodbye, () => this.hide());
+                    return;
+                }
 
-                // Reward Choice Logic
-                const hasGoodClue = person.clues && person.clues.good;
+                this.textEl.innerText = Dialogue.taskCompleteHeader;
+
+                const hasGoodClue = person.clues?.good;
+                const powerLabel = this.getPowerLabel(person);
 
                 if (hasGoodClue) {
-                    this.textEl.innerText += "\n\nI can give you a secret CLUE about the demon, or I can give you my ITEM.";
+                    this.textEl.innerText += `\n\n${Dialogue.taskCompleteGoodClueChoice}`;
 
-                    addButton("Get Clue", () => {
+                    addButton(Dialogue.buttons.getClue, () => {
                         if (this.onCompleteTask) this.onCompleteTask(person, 'CLUE');
-                        this.textEl.innerText = `Here is what I know: "${person.clues.good.text}"`;
+                        this.textEl.innerText = Dialogue.revealClue(person.clues?.good?.text ?? '');
                         this.optionsEl.innerHTML = '';
-                        addButton("Goodbye", () => this.hide());
+                        addButton(Dialogue.buttons.goodbye, () => this.hide());
                     });
 
-                    addButton("Get Item", () => {
-                        if (this.onCompleteTask) this.onCompleteTask(person, 'ITEM');
-                        this.textEl.innerText = `Here, take my ${person.attributes.item || "Item"}. It may help you finding the demon.`;
+                    addButton(powerLabel, () => {
+                        const result = this.onCompleteTask?.(person, 'POWER') as string | void;
+                        this.textEl.innerText = result || Dialogue.powerFallback;
                         this.optionsEl.innerHTML = '';
-                        addButton("Goodbye", () => this.hide());
+                        addButton(Dialogue.buttons.goodbye, () => this.hide());
                     });
 
                 } else {
-                    // Bad Clue (Rumor) Logic - Reward is Item
-                    this.textEl.innerText += `\n\nHere, take my ${person.attributes.item || "Item"}.`;
+                    this.textEl.innerText += `\n\n${Dialogue.taskCompleteBadClue}`;
 
-                    addButton("Take Item", () => {
-                        if (this.onCompleteTask) this.onCompleteTask(person, 'ITEM');
+                    addButton(powerLabel, () => {
+                        const result = this.onCompleteTask?.(person, 'POWER') as string | void;
+                        this.textEl.innerText = result || Dialogue.powerFallback;
                         this.optionsEl.innerHTML = '';
-                        addButton("Goodbye", () => this.hide());
+                        addButton(Dialogue.buttons.goodbye, () => this.hide());
                     });
                 }
             } else {
-                this.textEl.innerText = `Please hurry! I need you to ${activeTask.description}. (${activeTask.currentAmount}/${activeTask.amount})`;
-                addButton("I'm on it", () => this.hide());
+                this.textEl.innerText = Dialogue.taskInProgress(
+                    activeTask.description,
+                    activeTask.currentAmount,
+                    activeTask.amount
+                );
+                addButton(Dialogue.buttons.imOnIt, () => this.hide());
             }
         }
-        // 2. If player has NO active task OR has a task from someone else (Switching)
+        // 2. No active task OR task from someone else
         else {
             if (person.taskCompleted) {
-                this.textEl.innerText = "Thanks again for your help earlier!";
-                addButton("Goodbye", () => this.hide());
+                this.textEl.innerText = Dialogue.alreadyHelped;
+                addButton(Dialogue.buttons.goodbye, () => this.hide());
             } else {
-                // Task Offer
                 const taskDesc = person.task.description;
+                const powerOffer = this.getPowerOffer(person);
+                const hasGoodClue = person.clues?.good;
 
                 if (activeTask) {
-                    this.textEl.innerText = `I see you are busy with another task, but could you help me instead?\n\nMy Request: ${taskDesc}`;
-                    addButton("Replace Current Task", () => {
+                    this.textEl.innerText = hasGoodClue
+                        ? Dialogue.taskOfferBusyGoodClue(powerOffer, taskDesc)
+                        : Dialogue.taskOfferBusy(powerOffer, taskDesc);
+                    addButton(Dialogue.buttons.replaceCurrent, () => {
                         if (this.onAcceptTask) this.onAcceptTask(person.task);
                         this.hide();
                     });
                 } else {
-                    const hasGoodClue = person.clues && person.clues.good;
-                    if (hasGoodClue) {
-                        this.textEl.innerText = `If you complete my task I will tell you what I know.\n\nMy Request: ${taskDesc}`;
-                    } else {
-                        this.textEl.innerText = `Can you help me? ${taskDesc}`;
-                    }
+                    this.textEl.innerText = hasGoodClue
+                        ? Dialogue.taskOfferGoodClue(powerOffer, taskDesc)
+                        : Dialogue.taskOfferBadClue(powerOffer, taskDesc);
 
-                    addButton("Accept Task", () => {
+                    addButton(Dialogue.buttons.acceptTask, () => {
                         if (this.onAcceptTask) this.onAcceptTask(person.task);
                         this.hide();
                     });
                 }
 
-                addButton("No thanks", () => this.hide());
+                addButton(Dialogue.buttons.noThanks, () => this.hide());
             }
         }
     }

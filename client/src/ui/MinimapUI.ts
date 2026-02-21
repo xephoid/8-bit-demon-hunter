@@ -5,6 +5,7 @@ export class MinimapUI {
     private canvas: HTMLCanvasElement;
     private ctx: CanvasRenderingContext2D;
     private size = 200; // px
+    private wallCache: { worldId: string; imageData: ImageData } | null = null;
 
     constructor() {
         this.canvas = document.createElement('canvas');
@@ -34,7 +35,9 @@ export class MinimapUI {
         entities: any[],
         activeTask: GameTask | null,
         visitedPeople: Map<string, Person>,
-        currentWorldId: string
+        currentWorldId: string,
+        focusedTownId: string | null = null,
+        walls: boolean[][] | null = null
     ) {
         // Clear
         this.ctx.clearRect(0, 0, this.size, this.size);
@@ -50,65 +53,115 @@ export class MinimapUI {
             y: y * scaleY
         });
 
-        // 1. Draw Doors (Green Dots)
+        // 1. Draw Walls (Grey) — cached per world so pixel loop only runs on world change
+        if (walls) {
+            if (!this.wallCache || this.wallCache.worldId !== currentWorldId) {
+                const imageData = this.ctx.createImageData(this.size, this.size);
+                for (let px = 0; px < this.size; px++) {
+                    for (let py = 0; py < this.size; py++) {
+                        const tileX = Math.floor(px / scaleX);
+                        const tileY = Math.floor(py / scaleY);
+                        if (tileX < walls.length && tileY < walls[0].length && walls[tileX][tileY]) {
+                            const idx = (py * this.size + px) * 4;
+                            imageData.data[idx]     = 120; // R
+                            imageData.data[idx + 1] = 120; // G
+                            imageData.data[idx + 2] = 120; // B
+                            imageData.data[idx + 3] = 220; // A
+                        }
+                    }
+                }
+                this.wallCache = { worldId: currentWorldId, imageData };
+            }
+            this.ctx.putImageData(this.wallCache.imageData, 0, 0);
+        }
+
+        // 2. Draw Doors (Green Dots)
         this.ctx.fillStyle = '#00FF00';
         doors.forEach(door => {
+            if (door.type === 'house') return; // Hide house doors
             const p = toMap(door.x, door.y);
             this.ctx.beginPath();
             this.ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
             this.ctx.fill();
         });
 
-        // 2. Draw Task Giver (Yellow Dot)
+        // 2. Draw Focused Town (Purple Dot) — drawn before yellow so quest marker appears on top
+        if (focusedTownId) {
+            const focusedDoor = doors.find(d => d.type !== 'house' && (d.target === focusedTownId || d.id === focusedTownId));
+            if (focusedDoor) {
+                const p = toMap(focusedDoor.x, focusedDoor.y);
+                this.ctx.fillStyle = '#AA00FF';
+                this.ctx.beginPath();
+                this.ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
+                this.ctx.fill();
+
+                this.ctx.strokeStyle = '#AA00FF';
+                this.ctx.lineWidth = 2;
+                this.ctx.beginPath();
+                this.ctx.arc(p.x, p.y, 10, 0, Math.PI * 2);
+                this.ctx.stroke();
+            }
+        }
+
+        // 3. Draw Task Marker (Yellow Dot)
         if (activeTask && activeTask.giverId) {
-            const giver = visitedPeople.get(activeTask.giverId);
-            if (giver) {
-                // Determine where to point
-                let targetLoc: { x: number, y: number } | null = null;
+            let targetLoc: { x: number, y: number } | null = null;
 
-                if (currentWorldId) {
-                    const cWorldId = String(currentWorldId);
+            if (currentWorldId) {
+                const cWorldId = String(currentWorldId);
 
-                    if (cWorldId === giver.attributes.townId) {
-                        // Giver is in THIS town
-                        // Find their entity
-                        const entity = entities.find(e => e.properties && e.properties.personId === activeTask.giverId);
-                        if (entity) {
-                            targetLoc = { x: entity.x, y: entity.y };
-                        }
+                if (activeTask.type === 'ESCORT') {
+                    // For escort tasks: point to the DESTINATION town, not the giver's origin
+                    if (cWorldId === activeTask.targetId) {
+                        // Already at destination — no marker needed
+                        targetLoc = null;
+                    } else if (cWorldId.includes('world')) {
+                        // In overworld: point to destination town door
+                        const door = doors.find(d => d.target === activeTask.targetId);
+                        if (door) targetLoc = { x: door.x, y: door.y };
                     } else {
-                        // Giver is in ANOTHER town
-                        // If we are in the World (Hub), find door to that town
-                        if (cWorldId.includes('world')) {
-                            // Door IDs usually match or target matches townId?
-                            // In generateSimpleWorld: id: townId, target: townId
+                        // In wrong town: point to exit back to overworld
+                        const exit = doors.find(d => d.target.includes('world'));
+                        if (exit) targetLoc = { x: exit.x, y: exit.y };
+                    }
+                } else {
+                    const giver = visitedPeople.get(activeTask.giverId);
+                    if (giver) {
+                        if (cWorldId === giver.attributes.townId) {
+                            // Giver is in THIS town — find their entity position
+                            const entity = entities.find(e =>
+                                e.data && e.data.properties && e.data.properties.personId === activeTask.giverId
+                            );
+                            if (entity) {
+                                targetLoc = entity.data
+                                    ? { x: entity.data.x, y: entity.data.y }
+                                    : { x: entity.x, y: entity.y };
+                            }
+                        } else if (cWorldId.includes('world')) {
+                            // In overworld: point to giver's town door
                             const door = doors.find(d => d.target === giver.attributes.townId);
-                            if (door) {
-                                targetLoc = { x: door.x, y: door.y };
-                            }
+                            if (door) targetLoc = { x: door.x, y: door.y };
                         } else {
-                            // We are in WRONG TOWN -> Point to Exit
-                            const exit = doors.find(d => d.target.includes('world')); // Heuristic for exit
-                            if (exit) {
-                                targetLoc = { x: exit.x, y: exit.y };
-                            }
+                            // In wrong town: point to exit
+                            const exit = doors.find(d => d.target.includes('world'));
+                            if (exit) targetLoc = { x: exit.x, y: exit.y };
                         }
                     }
+                }
 
-                    if (targetLoc) {
-                        const p = toMap(targetLoc.x, targetLoc.y);
-                        this.ctx.fillStyle = '#FFFF00';
-                        this.ctx.beginPath();
-                        this.ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
-                        this.ctx.fill();
+                if (targetLoc) {
+                    const p = toMap(targetLoc.x, targetLoc.y);
+                    this.ctx.fillStyle = '#FFFF00';
+                    this.ctx.beginPath();
+                    this.ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
+                    this.ctx.fill();
 
-                        // Glow/Alert Ring
-                        this.ctx.strokeStyle = '#FFFF00';
-                        this.ctx.lineWidth = 2;
-                        this.ctx.beginPath();
-                        this.ctx.arc(p.x, p.y, 10, 0, Math.PI * 2);
-                        this.ctx.stroke();
-                    }
+                    // Glow/Alert Ring
+                    this.ctx.strokeStyle = '#FFFF00';
+                    this.ctx.lineWidth = 2;
+                    this.ctx.beginPath();
+                    this.ctx.arc(p.x, p.y, 10, 0, Math.PI * 2);
+                    this.ctx.stroke();
                 }
             }
         }

@@ -65,3 +65,48 @@ canvas {
   display: none;
   /* Hidden by default */
 }
+
+#death-screen {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: black;
+  display: none;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  z-index: 300;
+  pointer-events: all;
+}
+
+#death-title {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 80px;
+  color: red;
+  text-shadow: 4px 4px 0 #600;
+  margin-bottom: 60px;
+}
+
+#death-buttons {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.death-btn {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 20px;
+  color: white;
+  background: #222;
+  border: 3px solid #555;
+  padding: 16px 32px;
+  margin: 12px;
+  cursor: pointer;
+}
+
+.death-btn:hover {
+  background: #444;
+  border-color: #aaa;
+}

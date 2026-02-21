@@ -1,4 +1,5 @@
 import { Person, Town, Clue, GameTask, TaskType, DemonHunterState, Occupation, Pet, Color, Item } from '../../../shared/src/data/GameData';
+import { gameConfig } from '../config/gameConfig';
 
 export class DemonLogic {
 
@@ -8,11 +9,24 @@ export class DemonLogic {
         demon.isDemon = true;
         console.log(`Demon Selected: ${demon.name} (${demon.id}) in ${demon.attributes.townId}`);
 
+        // Select Minions
+        const minionCount = towns.length * (gameConfig.world.minionsPerTown || 1);
+        const candidates = people.filter(p => !p.isDemon);
+        DemonLogic.shuffle(candidates);
+        for (let i = 0; i < Math.min(minionCount, candidates.length); i++) {
+            candidates[i].isMinion = true;
+            console.log(`Minion Selected: ${candidates[i].name} (${candidates[i].id}) in ${candidates[i].attributes.townId}`);
+        }
+
         // 2. Generate Items (Unique per world)
         // README: "Generate ten times that number of items... 1 unique per person"
         const items: Item[] = [];
+        const itemRegistry = [...gameConfig.itemNameRegistry];
+        DemonLogic.shuffle(itemRegistry); // Randomize order
+
         for (let i = 0; i < people.length; i++) {
-            items.push({ id: `item_${i}`, name: `Item ${i}`, description: "A unique item." });
+            const name = i < itemRegistry.length ? itemRegistry[i] : `Item ${i}`;
+            items.push({ id: `item_${i}`, name: name, description: `A unique ${name}.` });
         }
 
         // 3. Assign Attributes
@@ -31,6 +45,38 @@ export class DemonLogic {
         });
 
         // 4. Generate Clues
+        const tempState = {
+            demonId: demon.id,
+            knownClues: [],
+            activeTask: null,
+            towns: towns,
+            items: items,
+            gameOver: false,
+            gameWon: false
+        } as DemonHunterState;
+        DemonLogic.regenerateClues(tempState);
+
+        // 5. Generate Tasks
+        DemonLogic.generateTasks(people, items, towns);
+
+        return {
+            demonId: demon.id,
+            items: items,
+            towns: towns
+        };
+    }
+
+    public static regenerateClues(state: DemonHunterState) {
+        if (!state.demonId) return;
+
+        const allPeople = state.towns.flatMap(t => t.people);
+        const demon = allPeople.find(p => p.id === state.demonId);
+        if (!demon) return;
+
+        // Clear existing clues
+        allPeople.forEach(p => {
+            p.clues = {};
+        });
 
         // Truth about the Demon
         const truth = {
@@ -45,121 +91,121 @@ export class DemonLogic {
             { text: `The demon is a ${truth.occupation}`, isGood: true, relatedAttribute: { key: 'occupation', value: truth.occupation } },
             { text: `The demon has a ${truth.pet}`, isGood: true, relatedAttribute: { key: 'pet', value: truth.pet } },
             { text: `The demon likes ${truth.color}`, isGood: true, relatedAttribute: { key: 'color', value: truth.color } },
-            { text: `The demon is in ${towns.find(t => t.id === truth.townId)?.name}`, isGood: true, relatedAttribute: { key: 'townId', value: truth.townId } },
-            { text: `The demon has ${items.find(i => i.id === truth.item)?.name}`, isGood: true, relatedAttribute: { key: 'item', value: truth.item } }
+            { text: `The demon is in ${state.towns.find(t => t.id === truth.townId)?.name || 'Unknown Town'}`, isGood: true, relatedAttribute: { key: 'townId', value: truth.townId } }
         ];
 
-        // Bad Clue Pool (All possible negations based on WORLD population)
-        // We only generate clues for things that EXIST in the world.
+        // Item Clue
+        if (truth.item && truth.item !== 'None') {
+            const itemName = state.items.find(i => i.id === truth.item)?.name || truth.item;
+            goodClues.push({ text: `The demon has ${itemName}`, isGood: true, relatedAttribute: { key: 'item', value: truth.item } });
+        }
+
+        // Bad Clue Pool
         const badCluePool: Clue[] = [];
+        const worldOccs = new Set(allPeople.map(p => p.attributes.occupation));
+        const worldPets = new Set(allPeople.map(p => p.attributes.pet));
+        const worldColors = new Set(allPeople.map(p => p.attributes.color));
+        const worldTowns = new Set(allPeople.map(p => p.attributes.townId));
+        const worldItems = new Set(allPeople.map(p => p.attributes.item).filter(i => i && i !== 'None'));
 
-        // Occupations
-        const uniqueOccs = Array.from(new Set(people.map(p => p.attributes.occupation)));
-        uniqueOccs.forEach(occ => {
-            if (occ !== truth.occupation) {
-                badCluePool.push({ text: `The demon is not a ${occ}`, isGood: false });
+        worldOccs.forEach(occ => {
+            if (occ !== truth.occupation) badCluePool.push({ text: `The demon is not a ${occ}`, isGood: false, relatedAttribute: { key: 'occupation', value: occ } });
+        });
+        worldPets.forEach(pet => {
+            if (pet !== truth.pet) badCluePool.push({ text: `The demon does not have a ${pet}`, isGood: false, relatedAttribute: { key: 'pet', value: pet } });
+        });
+        worldColors.forEach(col => {
+            if (col !== truth.color) badCluePool.push({ text: `The demon does not like ${col}`, isGood: false, relatedAttribute: { key: 'color', value: col } });
+        });
+        worldTowns.forEach(tId => {
+            if (tId !== truth.townId) {
+                const tName = state.towns.find(t => t.id === tId)?.name || "Unknown Town";
+                badCluePool.push({ text: `The demon is not in ${tName}`, isGood: false, relatedAttribute: { key: 'townId', value: tId } });
+            }
+        });
+        worldItems.forEach(itemId => {
+            if (itemId !== truth.item) {
+                const iName = state.items.find(i => i.id === itemId)?.name || itemId;
+                badCluePool.push({ text: `The demon does not have ${iName}`, isGood: false, relatedAttribute: { key: 'item', value: itemId } });
             }
         });
 
-        // Pets
-        const uniquePets = Array.from(new Set(people.map(p => p.attributes.pet)));
-        uniquePets.forEach(pet => {
-            if (pet !== truth.pet) {
-                badCluePool.push({ text: `The demon does not have a ${pet}`, isGood: false });
+        // Distribute
+        const innocents = allPeople.filter(p => !p.isDemon && !p.isMinion);
+        const minions = allPeople.filter(p => p.isMinion);
+        DemonLogic.shuffle(badCluePool);
+        DemonLogic.shuffle(goodClues);
+
+        // Group innocents by town so we can guarantee spread
+        const innocentsByTown = new Map<string, Person[]>();
+        for (const p of innocents) {
+            if (!innocentsByTown.has(p.attributes.townId)) {
+                innocentsByTown.set(p.attributes.townId, []);
             }
-        });
+            innocentsByTown.get(p.attributes.townId)!.push(p);
+        }
+        const townIds = Array.from(innocentsByTown.keys());
+        DemonLogic.shuffle(townIds);
 
-        // Colors
-        const uniqueColors = Array.from(new Set(people.map(p => p.attributes.color)));
-        uniqueColors.forEach(col => {
-            if (col !== truth.color) {
-                badCluePool.push({ text: `The demon does not like ${col}`, isGood: false });
-            }
-        });
+        // First pass: one good-clue holder per town (as many towns as there are good clues)
+        const goodClueHolders = new Set<string>();
+        for (let i = 0; i < Math.min(townIds.length, goodClues.length); i++) {
+            const pool = innocentsByTown.get(townIds[i])!;
+            const holder = pool[Math.floor(Math.random() * pool.length)];
+            holder.clues.good = goodClues[i];
+            goodClueHolders.add(holder.id);
+        }
 
-        // Towns
-        towns.forEach(t => {
-            if (t.id !== truth.townId) {
-                badCluePool.push({ text: `The demon is not in ${t.name}`, isGood: false });
-            }
-        });
-
-        // Items (Might be too many, but README says "All the items the demon does not have")
-        // Let's subset this to interesting items or just random for now to avoid 30 item clues.
-        // Or strictly follow README? "All the items". Okay, but maybe limit to items HELD by people?
-        // Let's add significant amount but maybe not ALL if it dilutes the pool too much?
-        // Actually, README says "Generate bad clues... All the items". 
-        // We'll generate a selection to keep ratio balanced.
-        const itemSubset = items.filter(i => i.id !== truth.item).slice(0, 10); // Take 10 wrong items
-        itemSubset.forEach(i => {
-            badCluePool.push({ text: `The demon does not have ${i.name}`, isGood: false });
-        });
-
-        // Distribute Clues
-        const nonDemons = people.filter(p => !p.isDemon);
-        this.shuffle(nonDemons); // Randomize recipients
-        this.shuffle(badCluePool); // Randomize bad clues
-
-        // 5 Good Clues to first 5 non-demons
-        // The REST get Bad Clues. Mutually Exclusive.
-        let goodClueIdx = 0;
-        let badClueIdx = 0;
-
-        nonDemons.forEach((p, i) => {
-            if (i < 5 && goodClueIdx < goodClues.length) {
-                // Give GOOD CLUE
+        // Second pass: scatter leftover good clues among remaining innocents
+        let goodClueIdx = Math.min(townIds.length, goodClues.length);
+        if (goodClueIdx < goodClues.length) {
+            const unassigned = innocents.filter(p => !goodClueHolders.has(p.id));
+            DemonLogic.shuffle(unassigned);
+            for (const p of unassigned) {
+                if (goodClueIdx >= goodClues.length) break;
                 p.clues.good = goodClues[goodClueIdx++];
-                // Ensure NO Bad Clue
-                delete p.clues.bad;
-            } else {
-                // Give BAD CLUE (Rumor)
-                if (badClueIdx < badCluePool.length) {
-                    p.clues.bad = badCluePool[badClueIdx++];
-                } else {
-                    // Reuse if run out
-                    p.clues.bad = badCluePool[Math.floor(Math.random() * badCluePool.length)];
-                }
-                // Ensure NO Good Clue
-                delete p.clues.good;
+                goodClueHolders.add(p.id);
             }
+        }
+
+        // Third pass: bad clues for everyone without a good clue
+        let badClueIdx = 0;
+        for (const p of innocents) {
+            if (!goodClueHolders.has(p.id)) {
+                if (badClueIdx < badCluePool.length) p.clues.bad = badCluePool[badClueIdx++];
+                else if (badCluePool.length > 0) p.clues.bad = badCluePool[Math.floor(Math.random() * badCluePool.length)];
+            }
+        }
+
+        // Demon & Minion Lies
+        const liars = [demon, ...minions];
+        liars.forEach(liar => {
+            const lieTarget = Math.random();
+            let lieText = "", lieAttr: any = undefined;
+            if (lieTarget < 0.25) { lieText = `The demon is not a ${demon.attributes.occupation}`; lieAttr = { key: 'occupation', value: demon.attributes.occupation || "" }; }
+            else if (lieTarget < 0.5) { lieText = `The demon does not have a ${demon.attributes.pet}`; lieAttr = { key: 'pet', value: demon.attributes.pet || "" }; }
+            else if (lieTarget < 0.75) { lieText = `The demon does not like ${demon.attributes.color}`; lieAttr = { key: 'color', value: demon.attributes.color || "" }; }
+            else {
+                const demonTownName = state.towns.find(t => t.id === demon.attributes.townId)?.name || "Unknown Town";
+                lieText = `The demon is not in ${demonTownName}`; lieAttr = { key: 'townId', value: demon.attributes.townId || "" };
+            }
+            liar.clues.bad = { text: lieText, isGood: false, relatedAttribute: lieAttr };
         });
-
-        // Demon's Lie (False Bad Clue)
-        // Deny a truth
-        const lieTarget = Math.random();
-        let lieText = "";
-        if (lieTarget < 0.25) lieText = `The demon is not a ${demon.attributes.occupation}`;
-        else if (lieTarget < 0.5) lieText = `The demon does not have a ${demon.attributes.pet}`;
-        else if (lieTarget < 0.75) lieText = `The demon does not like ${demon.attributes.color}`;
-        else lieText = `The demon is not in this town`;
-
-        demon.clues.bad = { text: lieText, isGood: false }; // It is "False" as logic, but "Bad Clue" type
-        delete demon.clues.good; // Demon has no good clue
-
-        // 5. Generate Tasks
-        this.generateTasks(people, items, towns);
-
-        return {
-            demonId: demon.id,
-            items: items,
-            towns: towns
-        };
     }
 
     private static generateTasks(people: Person[], items: Item[], towns: Town[]) {
         const taskPool: GameTask[] = [];
 
         // 1. Kill Tasks (1 per monster type)
-        const monsterTypes = ['slime', 'snake', 'skeleton', 'mushroom', 'soldier'];
-        monsterTypes.forEach(m => {
+        gameConfig.enemies.forEach(m => {
             taskPool.push({
-                id: `task_kill_${m}`,
+                id: `task_kill_${m.id}`,
                 type: TaskType.KILL,
-                targetId: m,
-                targetName: m.toUpperCase(),
-                amount: 3,
+                targetId: m.id,
+                targetName: m.name.toUpperCase(),
+                amount: m.toKill,
                 currentAmount: 0,
-                description: `Kill 3 ${m}s`,
+                description: `Kill ${m.toKill} ${m.name}s`,
                 reward: 'CLUE',
                 giverId: '', // Assigned later
                 isCompleted: false
@@ -234,51 +280,117 @@ export class DemonLogic {
             });
         });
 
-        // 3. Shuffle and Assign
-        this.shuffle(taskPool);
+        // Escort Tasks (1 per Town)
+        towns.forEach(town => {
+            // Target is ANY OTHER town
+            const otherTowns = towns.filter(t => t.id !== town.id);
+            if (otherTowns.length > 0) {
+                const targetTown = otherTowns[Math.floor(Math.random() * otherTowns.length)];
 
-        people.forEach((p, i) => {
-            if (taskPool.length > 0) {
-                // Try to find a valid task (not finding self)
-                let taskIndex = 0;
-                let task = taskPool[taskIndex];
+                // We create a generic "Escort" task template for this town
+                // It will be assigned to a person IN this town effectively by the shuffler
+                // But wait, the shuffler assigns tasks randomly to ANYONE.
+                // If a person in Town A gets "Escort to Town B", that works.
+                // If a person in Town A gets "Escort to Town A"... that's bad.
+                // We need to handle this in conflict check.
 
-                // Simple conflict check: If finding self attribute
-                // This is an approximation. Ideally we check if "Target == Self".
-                // Since tasks target "Occupation String", we check if p matches.
-                let conflicts = this.checkConflict(p, task);
-                let attempts = 0;
+                taskPool.push({
+                    id: `task_escort_from_${town.id}_to_${targetTown.id}`,
+                    type: TaskType.ESCORT,
+                    targetId: targetTown.id,
+                    targetName: targetTown.name,
+                    amount: 1,
+                    currentAmount: 0,
+                    description: `Escort me to ${targetTown.name}`,
+                    reward: 'CLUE',
+                    giverId: '',
+                    isCompleted: false
+                });
+            }
+        });
 
-                while (conflicts && attempts < 10 && taskPool.length > 1) {
-                    // Swap with end or just pick another?
-                    // Let's just rotate pool?
-                    taskPool.push(taskPool.shift()!); // Rotate front to back
-                    task = taskPool[0];
-                    conflicts = this.checkConflict(p, task);
-                    attempts++;
-                }
+        // 3. Assign kill tasks to good-clue holders, then distribute the rest
+        const killTasks = taskPool.filter(t => t.type === TaskType.KILL);
+        const escortTasks = taskPool.filter(t => t.type === TaskType.ESCORT);
+        const otherTasks = taskPool.filter(t => t.type !== TaskType.KILL && t.type !== TaskType.ESCORT);
+        this.shuffle(killTasks);
+        this.shuffle(escortTasks);
+        this.shuffle(otherTasks);
 
-                // Pop the valid task
-                p.task = taskPool.shift()!;
-                p.task.giverId = p.id;
-                p.task.reward = p.clues.good ? 'CLUE' : 'ITEM'; // Reward logic
-            } else {
-                // Fallback if pool exhausted (shouldn't happen with 10x generation)
-                // Just give a generic kill task
+        const goodClueHolders = people.filter(p => p.clues?.good);
+        const assigned = new Set<string>();
+
+        // First pass: give every Merchant an escort task (Merchants are travel traders — escort fits their role)
+        // Retry shuffle until a valid conflict-free assignment exists for all merchants.
+        const merchants = people.filter(p => p.attributes.occupation === 'Merchant');
+        let merchantAssignments: Array<[Person, GameTask]> | null = null;
+        for (let attempt = 0; attempt < 20; attempt++) {
+            this.shuffle(escortTasks);
+            const usedTasks = new Set<GameTask>();
+            const tempAssignments: Array<[Person, GameTask]> = [];
+            let allAssigned = true;
+            for (const merchant of merchants) {
+                const task = escortTasks.find(t => !usedTasks.has(t) && t.targetId !== merchant.attributes.townId);
+                if (!task) { allAssigned = false; break; }
+                tempAssignments.push([merchant, task]);
+                usedTasks.add(task);
+            }
+            if (allAssigned) { merchantAssignments = tempAssignments; break; }
+        }
+        if (merchantAssignments) {
+            for (const [merchant, task] of merchantAssignments) {
+                escortTasks.splice(escortTasks.indexOf(task), 1);
+                merchant.task = task;
+                merchant.task.giverId = merchant.id;
+                merchant.task.reward = merchant.clues?.good ? 'CLUE' : 'ITEM';
+                assigned.add(merchant.id);
+            }
+        }
+
+        // Second pass: give every good-clue holder a kill task
+        for (const p of goodClueHolders) {
+            if (assigned.has(p.id)) continue; // Merchant already assigned
+            if (killTasks.length === 0) break;
+            p.task = killTasks.shift()!;
+            p.task.giverId = p.id;
+            p.task.reward = 'CLUE';
+            assigned.add(p.id);
+        }
+
+        // General pool: leftover kill tasks + remaining escort tasks + all non-kill/non-escort tasks
+        const generalPool = [...killTasks, ...escortTasks, ...otherTasks];
+        this.shuffle(generalPool);
+
+        // Second pass: assign remaining tasks to everyone not yet assigned
+        const unassigned = people.filter(p => !assigned.has(p.id));
+        for (const p of unassigned) {
+            if (generalPool.length === 0) {
+                const fallbackEnemy = gameConfig.enemies[0];
                 p.task = {
                     id: `task_generic_${p.id}`,
                     type: TaskType.KILL,
-                    targetId: 'slime',
-                    targetName: 'SLIME',
-                    amount: 5,
+                    targetId: fallbackEnemy.id,
+                    targetName: fallbackEnemy.name.toUpperCase(),
+                    amount: fallbackEnemy.toKill,
                     currentAmount: 0,
-                    description: `Kill 5 slimes`,
+                    description: `Kill ${fallbackEnemy.toKill} ${fallbackEnemy.name}s`,
                     reward: 'ITEM',
                     giverId: p.id,
                     isCompleted: false
                 };
+                continue;
             }
-        });
+
+            let attempts = 0;
+            while (this.checkConflict(p, generalPool[0]) && attempts < 10 && generalPool.length > 1) {
+                generalPool.push(generalPool.shift()!);
+                attempts++;
+            }
+
+            p.task = generalPool.shift()!;
+            p.task.giverId = p.id;
+            p.task.reward = p.clues?.good ? 'CLUE' : 'ITEM';
+        }
     }
 
     private static checkConflict(p: Person, task: GameTask): boolean {
@@ -289,6 +401,10 @@ export class DemonLogic {
         }
         if (task.type === TaskType.FIND_ITEM) {
             if (task.targetId === p.attributes.item) return true;
+        }
+        if (task.type === TaskType.ESCORT) {
+            // Don't escort to the town you are already in
+            if (task.targetId === p.attributes.townId) return true;
         }
         return false;
     }

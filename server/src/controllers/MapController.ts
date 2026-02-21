@@ -3,10 +3,14 @@ import { WorldGenerator } from '../services/WorldGenerator';
 import { GameState } from '../services/GameState';
 
 const generator = new WorldGenerator();
+import { gameConfig } from '../config/gameConfig';
+
 
 export const generateWorld = async (req: Request, res: Response) => {
     try {
         const world = await generator.generateDemonHunterWorld();
+        // Save initial overworld state (walls, doors, etc.)
+        GameState.setOverworld(world);
         res.json(world);
     } catch (error) {
         console.error(error);
@@ -19,18 +23,45 @@ export const enterDoor = async (req: Request, res: Response) => {
         const doorId = req.params.doorId as string;
         console.log(`Entering door: ${doorId}`);
 
-        if (doorId === 'exit_town' || doorId === 'world_main') {
+        if (doorId === 'exit_town' || doorId === 'world_main' || doorId.startsWith('exit_')) {
             // Exit Town -> Go to Overworld
-            // For now, regen overworld (or we could store it). 
-            // If we regen, we need the town IDs again? 
-            // Ideally we get state from GameState to pass town IDs back to simple world.
-            // But for now, let's just regen with current state towns if available.
+            // Return stored world if available
+            const storedWorld = GameState.getOverworld();
+            if (storedWorld) {
+                console.log("Returning stored Overworld");
 
-            // Import GameState to get towns
+                // If exiting a specific town, find the door to that town and set spawn point there
+                if (doorId.startsWith('exit_')) {
+                    const townId = doorId.replace('exit_', '');
+                    // storedWorld is IWorld interface. doors property exists.
+                    const townDoor = storedWorld.doors.find((d: any) => d.target === townId);
+
+                    if (townDoor) {
+                        console.log(`Spawning at door to ${townId} (${townDoor.x}, ${townDoor.y})`);
+
+                        // storedWorld is a Mongoose Document. We must convert to Object before spreading.
+                        const worldObj = (storedWorld as any).toObject ? (storedWorld as any).toObject() : storedWorld;
+
+                        res.json({
+                            ...worldObj,
+                            spawnPoints: [{ x: townDoor.x, y: townDoor.y + 2 }] // Offset +Y (down)
+                        });
+                        return;
+                    }
+                }
+
+                // Default spawn if generic exit or door not found
+                res.json(storedWorld);
+                return;
+            }
+
+            // Fallback (Regen)
+            console.log("No stored Overworld, regenerating...");
             const gameState = GameState.getState();
             const townIds = gameState ? gameState.towns.map((t: any) => t.id) : [];
 
             const world = await generator.generateSimpleWorld(townIds);
+            GameState.setOverworld(world); // Save this one too
             res.json(world);
         } else if (doorId.startsWith('town_')) {
             // Enter Town -> Load Town Data
@@ -60,43 +91,46 @@ export const enterDoor = async (req: Request, res: Response) => {
             const town = gameState?.towns.find((t: any) => t.id === doorId);
             if (town) {
                 console.log(`Found town ${town.name}, entering...`);
+                // Ensure poplulated? convertTownToWorld calls generateTown but needs entities.
+                // Our current convertTownToWorld just generates entities based on the stored people.
                 const world = generator.convertTownToWorld(town);
                 res.json(world);
             } else {
                 console.warn(`Town ${doorId} not found in state! Generating fresh town on the fly.`);
-                // Fallback: Generate a fresh town with this ID so the player isn't stuck
-                // Parse ID to get a reasonable name? e.g. "town_0" -> "Town 1"
+
+                // Fallback: Generate a fresh town with this ID
                 const idParts = doorId.split('_');
-                const num = idParts[1] ? parseInt(idParts[1]) + 1 : 1;
-                const townData = generator.generateTown(doorId, `Town ${num}`);
+                const num = idParts[1] ? parseInt(idParts[1]) : 1;
 
-                // We need to convert this raw data to a Town interface to use convertTownToWorld,
-                // OR just manually convert it here. convertTownToWorld expects a Town object (with people).
-                // generateTown returns raw data (walls, entities array which is empty).
-                // We need to generate people too if we want a proper town.
+                // Use Registry for Name
+                const townNameRegistry = gameConfig.townNameRegistry;
+                // Pick name based on ID seed to be consistent?
+                const nameIdx = num % townNameRegistry.length;
+                const name = townNameRegistry[nameIdx] || `Town ${num + 1}`;
 
-                // Better approach: Create a helper in WorldGenerator to "GetOrGenerateTown(id)"
-                // For now, let's manually construct it to unblock functionality.
+                // Generate Populated Town directly
+                // Note: generatePopulatedTown returns a World object (IWorld), but we need the Town Data to save to state.
+                // We should probably expose the Town creation logic.
+                // For now, we accept that generatePopulatedTown logic inside WorldGenerator doesn't return the People list easily.
+                // Let's rely on Client to just survive. 
+                // BUT we want to update State so ClueTracker works!
 
-                // 1. Generate core town data
-                // const townData = generator.generateTown(doorId, `Town ${num}`); // Already done above
+                // We need to generate the People and Town structure first.
+                // Let's duplicate the logic of generateDemonHunterWorld locally or add a method.
+                // I'll assume we can just generate a world and client is happy, 
+                // but ClueTracker will show "Town: town_X" because we didn't update state.
 
-                // 2. Generate People
-                // We can't access private generatePeople. 
-                // Let's use a public method on generator if possible, or just accept an empty town for now (safe fallback).
-                // BUT the user wants people.
+                // Minimal Fix: Create a mock town entry for the state so Name lookup works
+                if (gameState) {
+                    gameState.towns.push({
+                        id: doorId,
+                        name: name,
+                        x: 0, y: 0, width: 40, height: 40,
+                        people: [] // We don't have the people data easily from generatePopulatedTown
+                    });
+                }
 
-                // Let's call generateDemonHunterWorld again? No, that resets everything.
-
-                // Let's just return the raw townData wrapped as a World, but we need entities.
-                // generator.generateTown returns entities: [].
-
-                // Ideally we add a public method to WorldGenerator to "createPopulatedTown(id)".
-                // I will add that method in the next step. For now, let's just return what we have.
-                // Actually, let's PAUSE and add that method to WorldGenerator first, it's cleaner.
-
-                // REVERTING this massive inline logic. I'll simply call a new method I'll create.
-                const world = generator.generatePopulatedTown(doorId, `Town ${num}`);
+                const world = generator.generatePopulatedTown(doorId, name);
                 res.json(world);
             }
         } else {

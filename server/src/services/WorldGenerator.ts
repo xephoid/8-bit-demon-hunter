@@ -16,9 +16,14 @@ export class WorldGenerator {
     public async generateDemonHunterWorld(): Promise<any> {
         // 1. Generate Towns
         const towns: Town[] = [];
-        const townCount = 3; // Start with 3 towns
+        const townCount = gameConfig.world.roomCount;
+        const townNameRegistry = [...gameConfig.townNameRegistry];
+        this.shuffle(townNameRegistry);
+
         for (let i = 0; i < townCount; i++) {
-            const townData = this.generateTown(`town_${i}`, `Town ${i + 1}`);
+            const name = i < townNameRegistry.length ? townNameRegistry[i] : `Town ${i + 1}`;
+            const pop = 10;
+            const townData = this.generateTown(`town_${i}`, name, pop);
             // Convert to Town Interface
             const town: Town = {
                 id: townData.id,
@@ -31,7 +36,7 @@ export class WorldGenerator {
             };
 
             // 2. Generate People for this town
-            town.people = this.generatePeople(town.id, 10);
+            town.people = this.generatePeople(town.id, pop);
             towns.push(town);
         }
 
@@ -63,19 +68,49 @@ export class WorldGenerator {
         // Re-generate walls from town data or store them in Town?
         // For now, re-call generateTown to get walls (inefficient but works for prototype)
         const townData = this.generateTown(town.id, town.name);
+        const walls = townData.walls;
+
+        // Helper to find safe spot
+        const usedSpots = new Set<string>();
+        const findSafeSpot = (): { x: number, y: number } => {
+            let attempts = 0;
+            while (attempts < 100) {
+                const x = Math.floor(Math.random() * (townData.width - 2)) + 1;
+                const y = Math.floor(Math.random() * (townData.height - 2)) + 1;
+                const key = `${x},${y}`;
+
+                // Check Walls (Center + Neighbors)
+                const isClear = !walls[x][y] &&
+                    !walls[x + 1][y] && !walls[x - 1][y] &&
+                    !walls[x][y + 1] && !walls[x][y - 1];
+
+                if (isClear && !usedSpots.has(key)) {
+                    usedSpots.add(key);
+                    return { x, y };
+                }
+                attempts++;
+            }
+            return { x: 5, y: 5 }; // Fallback
+        };
 
         // Convert People to Entities
-        const entities = town.people.map(p => ({
-            type: 'person', // Client needs to handle this
-            name: p.name,
-            x: Math.floor(Math.random() * 30) + 5, // Random pos for now
-            y: Math.floor(Math.random() * 30) + 5,
-            properties: {
-                ...p, // Full Person Data
-                personId: p.id,
-                sprite: p.sprite
-            }
-        }));
+        const entities = town.people.map(p => {
+            const pos = findSafeSpot();
+            return {
+                type: 'person', // Client needs to handle this
+                name: p.name,
+                x: pos.x,
+                y: pos.y,
+                properties: {
+                    ...p, // Full Person Data
+                    personId: p.id,
+                    sprite: p.sprite
+                }
+            };
+        });
+
+        // Add Exit Zone Entity (Visual)? Or handled by Door?
+        // Door is handled by client LevelBuilder usually.
 
         return new World({
             customId: town.id,
@@ -84,14 +119,15 @@ export class WorldGenerator {
             type: 'city',
             walls: townData.walls,
             doors: townData.doors, // Exits
-            spawnPoints: [{ x: 10, y: 10 }],
+            spawnPoints: [{ x: 20, y: 37 }],
             entities: entities
         });
     }
 
     public generatePopulatedTown(id: string, name: string): IWorld {
-        const townData = this.generateTown(id, name);
-        const people = this.generatePeople(id, 10);
+        const pop = 10;
+        const townData = this.generateTown(id, name, pop);
+        const people = this.generatePeople(id, pop);
 
         // Add people to entities list
         const entities = people.map(p => {
@@ -104,8 +140,11 @@ export class WorldGenerator {
                 ex = Math.floor(Math.random() * (townData.width - 2)) + 1;
                 ey = Math.floor(Math.random() * (townData.height - 2)) + 1;
 
-                // Check Wall
-                if (!townData.walls[ex][ey]) {
+                // Check Wall (and neighbors for safety)
+                // We want to ensure they are not IN a wall.
+                if (!townData.walls[ex][ey] &&
+                    !townData.walls[ex + 1][ey] && !townData.walls[ex - 1][ey] &&
+                    !townData.walls[ex][ey + 1] && !townData.walls[ex][ey - 1]) {
                     placed = true;
                 }
                 attempts++;
@@ -126,13 +165,14 @@ export class WorldGenerator {
         });
 
         return new World({
+            customId: id,
             width: townData.width,
             height: townData.height,
             type: 'city',
             // Ensure type is 'city' which LevelBuilder uses for floor_city
             walls: townData.walls,
             doors: townData.doors,
-            spawnPoints: [{ x: 10, y: 10 }],
+            spawnPoints: [{ x: 20, y: 37 }],
             entities: entities
         });
     }
@@ -144,29 +184,65 @@ export class WorldGenerator {
         // Shuffle occupations to ensure uniqueness
         this.shuffle(occupations);
 
+        // Shuffle Name Registry
+        const namePool = [...gameConfig.personNameRegistry];
+        this.shuffle(namePool);
+
         for (let i = 0; i < count; i++) {
             // Basic random generation
-            const gender = Math.random() > 0.5 ? 'male' : 'female';
+            let personName = `Person ${i}`;
+            let gender = Math.random() > 0.5 ? 'male' : 'female';
+
+            if (namePool.length > 0) {
+                const entry = namePool.pop()!;
+                personName = entry.name;
+                gender = entry.gender;
+            }
 
             const personId = `${townId}_p_${i}`;
             // Assign unique task type if available, else random
-            const monsterTypes = ['slime', 'snake', 'skeleton', 'mushroom', 'soldier'];
+            const monsterTypes = gameConfig.enemies.map(e => e.id);
             // Simple deterministic shuffle based on index for variety without full shuffle state in this scope if needed, 
             // but better to use the class shuffle if we can. 
             // Actually, let's just pick one based on index for now to ensure uniqueness in small towns.
-            const monsterType = monsterTypes[i % monsterTypes.length];
+            const monsterTypeConf = gameConfig.enemies[i % gameConfig.enemies.length];
+            const monsterType = monsterTypeConf.id;
+            const monsterName = monsterTypeConf.name || monsterType;
+            const monsterToKill = monsterTypeConf.toKill || 3;
 
-            const task = this.generateKillTask(townId, i, monsterType);
+            const task = this.generateKillTask(townId, i, monsterType, monsterName, monsterToKill);
             task.giverId = personId;
 
-            // Character Sprites (0-7 available)
-            // ensuring uniqueness per town
-            const spriteId = i % 8; // Iterate through 0-7, repeat if needed (towns have 10 people)
+            // Character Sprites
+            // 24 Rows (0-23)
+            // 26 Skins per Row (0-25) -> Cols = Skin * 3 + [0,1,2]
+
+            // Randomly select a row and skin
+            const maxRows = 24;
+            const maxSkinsPerRow = 26;
+
+            const row = Math.floor(Math.random() * maxRows);
+            const skin = Math.floor(Math.random() * maxSkinsPerRow);
+
+            // Store as "character_ROW_SKIN" so client can parse it
+            // Client expects "character_ROW" as base? 
+            // Previous fix used: match(/character_(\d+)/) -> treated as ID
+            // And calculated: (ID * 3) + 2.
+
+            // New logic needs to conform to what EntityManager expects.
+            // EntityManager currently parses: character_(\d+) -> int(ID).
+            // Then accesses: character_0_{ID*3 + 2} (Hardcoded 0 row).
+
+            // We need to send a format that EntityManager can parse for ROW and SKIN.
+            // OR update EntityManager to handle "character_ROW_SKIN".
+
+            // Let's use format: "character_ROW_SKIN"
+            const spriteId = `character_${row}_${skin}`; // e.g. character_5_12
 
             people.push({
                 id: personId,
-                name: `Person ${i}`,
-                sprite: `character_${spriteId}`, // Base sprite ID
+                name: personName,
+                sprite: spriteId, // NOW PASSING FULL STRING ID
                 attributes: {
                     occupation: occupations[i % occupations.length],
                     pet: Object.values(Pet)[Math.floor(Math.random() * Object.values(Pet).length)] as Pet,
@@ -185,17 +261,18 @@ export class WorldGenerator {
         return people;
     }
 
-    private generateKillTask(townId: string, seed: number, monsterType: string): GameTask {
-        const amount = 3 + (seed % 3); // 3 to 5
+    private generateKillTask(townId: string, seed: number, monsterType: string, monsterName?: string, toKill: number = 3): GameTask {
+        const amount = toKill;
+        const name = monsterName || monsterType;
 
         return {
             id: `task_${townId}_${seed}`,
             type: TaskType.KILL,
             targetId: monsterType,
-            targetName: monsterType.toUpperCase(),
+            targetName: name.toUpperCase(),
             amount: amount,
             currentAmount: 0,
-            description: `Kill ${amount} ${monsterType}s`,
+            description: `Kill ${amount} ${name}s`,
             reward: 'CLUE', // Default for now
             giverId: "unknown",
             isCompleted: false
@@ -209,9 +286,9 @@ export class WorldGenerator {
         }
     }
 
-    public generateTown(id: string, name: string): any { // Todo: Return Town interface
-        const width = 40;
-        const height = 40;
+    private generateTown(id: string, name: string, population: number = 10): any { // Updated Signature
+        const width = gameConfig.world.townWidth;
+        const height = gameConfig.world.townHeight;
         const walls: boolean[][] = Array(width).fill(false).map(() => Array(height).fill(false));
         const entities: any[] = [];
 
@@ -223,24 +300,70 @@ export class WorldGenerator {
                 }
             }
         }
-        // Open Exit at bottom
-        walls[20][39] = false;
+        const doors: any[] = [
+            { x: 20, y: 39, id: `exit_${id}`, target: 'world_main', type: 'exit' } // Exit to world
+        ];
 
-        // 2. Simple House Grid (Visual only for now)
-        // 5x5 grid of houses
-        for (let i = 0; i < 5; i++) {
-            for (let j = 0; j < 5; j++) {
-                const hx = 5 + (i * 7);
-                const hy = 5 + (j * 7);
-                // Create a 3x3 block for a house
-                for (let bx = 0; bx < 3; bx++) {
-                    for (let by = 0; by < 3; by++) {
-                        walls[hx + bx][hy + by] = true;
+        // 2. Dynamic Building Placement
+        const buildings: { x: number, y: number, w: number, h: number }[] = [];
+
+        // Helper: Try to place a building
+        const placeBuilding = (bw: number, bh: number, type: 'house' | 'hall', idSuffix: string): boolean => {
+            let placed = false;
+            let attempts = 0;
+            while (!placed && attempts < 50) {
+                // Random Pos (keep padding from edge 3 units)
+                const bx = Math.floor(Math.random() * (width - bw - 6)) + 3;
+                const by = Math.floor(Math.random() * (height - bh - 6)) + 3;
+
+                // Check Collisions with other buildings (plus padding)
+                const padding = 2; // Space between buildings
+                const overlap = buildings.some(b => {
+                    return !(bx + bw + padding <= b.x ||
+                        bx >= b.x + b.w + padding ||
+                        by + bh + padding <= b.y ||
+                        by >= b.y + b.h + padding);
+                });
+
+                // Also check if overlaps with Exit Door (fixed at 20, 39)
+                const exitOverlap = (bx <= 20 && bx + bw >= 20 && by <= 39 && by + bh >= 39);
+
+                if (!overlap && !exitOverlap) {
+                    // Place it!
+                    buildings.push({ x: bx, y: by, w: bw, h: bh });
+
+                    // Draw Walls
+                    for (let i = 0; i < bw; i++) {
+                        for (let j = 0; j < bh; j++) {
+                            walls[bx + i][by + j] = true;
+                        }
                     }
+
+                    // Add Door (Center of bottom face)
+                    const doorX = bx + Math.floor(bw / 2);
+                    const doorY = by + bh - 1;
+
+                    doors.push({
+                        x: doorX,
+                        y: doorY,
+                        id: `door_${id}_${idSuffix}`,
+                        type: 'house', // Hall is also 'house' for visual logic (solid wall)
+                    });
+
+                    placed = true;
                 }
-                // Clear door
-                walls[hx + 1][hy] = false;
+                attempts++;
             }
+            return placed;
+        };
+
+        // 2a. Place Town Hall (One, 6x5)
+        placeBuilding(6, 5, 'hall', 'hall');
+
+        // 2b. Place Houses (Equal to Population)
+        for (let i = 0; i < population; i++) {
+            // 3x3 Houses
+            placeBuilding(3, 3, 'house', `house_${i}`);
         }
 
         return {
@@ -251,10 +374,8 @@ export class WorldGenerator {
             type: 'city',
             walls,
             entities,
-            doors: [
-                { x: 20, y: 39, id: 'exit_town', target: 'world_main' } // Exit to world
-            ],
-            spawnPoints: [{ x: 10, y: 10 }]
+            doors: doors,
+            spawnPoints: [{ x: 20, y: 37 }]
         };
     }
 
@@ -306,17 +427,13 @@ export class WorldGenerator {
             let placed = false;
             let attempts = 0;
 
-            // Determine HP
+            // Determine HP and XP
             let hp = 10;
-            switch (type) {
-                case 'slime': hp = 2; break;
-                case 'mushroom': hp = 3; break;
-                case 'snake': hp = 4; break;
-                case 'druid': hp = 5; break; // Wizard
-                case 'skeleton': hp = 6; break;
-                case 'dude':
-                case 'chick': hp = 7; break; // Bandits
-                case 'soldier': hp = 20; break; // Knight
+            let xp = 0;
+            const enemyConfig = gameConfig.enemies.find(e => e.id === type);
+            if (enemyConfig) {
+                hp = enemyConfig.hp;
+                xp = enemyConfig.xp;
             }
 
             while (!placed && attempts < 50) {
@@ -325,13 +442,17 @@ export class WorldGenerator {
 
                 if (!walls[ex][ey]) {
                     const tooClose = cities.some(c => Math.sqrt((c.x - ex) ** 2 + (c.y - ey) ** 2) < 8);
-                    if (!tooClose) {
+
+                    // Also check neighbors
+                    const isClear = !walls[ex + 1][ey] && !walls[ex - 1][ey] && !walls[ex][ey + 1] && !walls[ex][ey - 1];
+
+                    if (!tooClose && isClear) {
                         entities.push({
                             type: type,
                             name: `${type}_${entities.length}`,
                             x: ex,
                             y: ey,
-                            properties: { hp: hp }
+                            properties: { hp: hp, xp: xp }
                         });
                         placed = true;
                     }
@@ -340,18 +461,28 @@ export class WorldGenerator {
             }
         };
 
-        // Spawn Specific Types
-        for (let i = 0; i < gameConfig.entities.maxBlobs; i++) spawnEntity('slime');
-        for (let i = 0; i < gameConfig.entities.maxSnakes; i++) spawnEntity('snake');
-        for (let i = 0; i < gameConfig.entities.maxWizards; i++) spawnEntity('druid');
-        for (let i = 0; i < gameConfig.entities.maxMushrooms; i++) spawnEntity('mushroom');
-        for (let i = 0; i < gameConfig.entities.maxKnights; i++) spawnEntity('soldier');
+        // Spawn based on enemy config max values
+        gameConfig.enemies.forEach(enemy => {
+            for (let i = 0; i < enemy.max; i++) {
+                spawnEntity(enemy.id);
+            }
+        });
 
-        // Spawn Others
-        const otherTypes = ['skeleton', 'dude', 'chick']; // Removed 'bat'
-        for (let i = 0; i < gameConfig.entities.maxOthers; i++) {
-            const type = otherTypes[Math.floor(Math.random() * otherTypes.length)];
-            spawnEntity(type);
+        // Calculate safe random spawn point for player
+        let playerSpawn = cities[0]; // Fallback
+        let spawnAttempts = 0;
+        while (spawnAttempts < 500) {
+            const sx = Math.floor(Math.random() * (this.width - 2)) + 1;
+            const sy = Math.floor(Math.random() * (this.height - 2)) + 1;
+
+            if (!walls[sx][sy] && !walls[sx + 1][sy] && !walls[sx - 1][sy] && !walls[sx][sy + 1] && !walls[sx][sy - 1]) {
+                const tooCloseToEnemy = entities.some((e: any) => Math.sqrt((e.x - sx) ** 2 + (e.y - sy) ** 2) < 15);
+                if (!tooCloseToEnemy) {
+                    playerSpawn = { x: sx, y: sy };
+                    break;
+                }
+            }
+            spawnAttempts++;
         }
 
         const world = new World({
@@ -361,7 +492,7 @@ export class WorldGenerator {
             type: 'world',
             walls: walls,
             doors: doors,
-            spawnPoints: [cities[0]], // Spawn at first city
+            spawnPoints: [playerSpawn],
             entities: entities
         });
 

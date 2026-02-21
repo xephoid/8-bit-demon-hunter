@@ -1,8 +1,10 @@
 import { DemonHunterState } from '../../../shared/src/data/GameData';
+import { IWorld } from '../models/World';
 
 class GameStateService {
     private static instance: GameStateService;
     private state: DemonHunterState | null = null;
+    private overworld: IWorld | null = null;
 
     private constructor() { }
 
@@ -19,6 +21,14 @@ class GameStateService {
 
     public setState(state: DemonHunterState): void {
         this.state = state;
+    }
+
+    public getOverworld(): IWorld | null {
+        return this.overworld;
+    }
+
+    public setOverworld(world: IWorld): void {
+        this.overworld = world;
     }
 
     public clearState(): void {

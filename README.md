@@ -139,6 +139,52 @@ World Generation:
   - 1 Escort task per town (number of towns)
 - Randomly assign tasks to people (including the demon!)
 
+## Minions
+Depending on the total population of the world (number of towns * 10) the demon will have a certain number of minions. Should be configurable in the config file. Start with 1 per town. The minions also lie to help hide the demon otherwise they work exactly like normal people.
+
+## Leveling system
+The player has 4 stats that can be leveled up:
+- Strength: Increases damage (max 5)
+- Agility: Increases player movement speed (need to find max in code)
+- Health: Increases number of hearts (max 10)
+- Range: Increases player attack range (max 5)
+- Max player level is 10
+
+XP system:
+Ther player gains xp by killing enemies. Level ups will be at 4xp, then 8xp, then 16xp, then 32xp, then 64xp, then 128xp, then 256xp, then 512xp, then 1024xp. At each level up the player can choose to increase one of their stats by 1. The amount of xp needed for each level up can be configured in the config file.
+
+Base stats:
+- Strength: 1
+- Agility: 1
+- Health: 3
+- Range: 1
+
+Dev notes
+- The current hard coded speed is very fast. I Think it should be the max the player can get! But also the min should not be too slow. Will need to find a good balance.
+- When range is increased the attack sprite should move further away from the player. Initially it will flash directly in front of the player (currently implemented). At higher levels it will move out in front of the player in the direction the player is facing. The distance increases 1 tile per level.
+- All numbers (base stats, max stats, xp needed for level up, etc) should be configurable in the config file
+
+## NPC Powers (NEW)
+Instead of NPC's giving the player items they can use powers to help the player. Powers are based on their occupation.
+
+Powers:
+| Occupation | Power                                                                      | Dialog                                                | Notes                                              |
+| ---------- | -------------------------------------------------------------------------- | ----------------------------------------------------- | -------------------------------------------------- |
+| Farmer     | Tells the player if they have met the demon                                | "You have/ have not met the demon yet."               | ""                                                 |
+| Musician   | Tells the player how many minions are in the current town                  | "There are [number] minions in this town."            | ""                                                 |
+| Barber     | Introduces the player to a random numer of people between 1 and 5          | "I have introduced you to [number] people."           | Adds the people to the clue tracker                |
+| Tailor     | Tells the player if someone in town is lying                               | "Some poeple/No one in this town are/is lying."       | Add to clue tracker (special clue)                 |
+| Mayor      | Introduces the player to everyone in town                                  | "I have introduced you to everyone in town."          | Adds all people in town to the clue tracker        |
+| Merchant   | Introduces the player to a random person from another town                 | "Let me introduce you to [name] from [town]."         | Adds the person to the clue tracker                |
+| Soldier    | Give the player 20 xp                                                      | "Nice training session!."                             | ""                                                 |
+| Blacksmith | Improves one of the player's stats by 1                                    | "Hope this helps you in your quest."                  | Functionally same as leveling up                   |
+| Carpenter  | Gives a location base bad clue                                             | "The demon is not in [location]."                     | Should be a clue that isn't known by any other NPC |
+| Baker      | Tells the player the name of one person in their town who is not the demon | "[name] is not the demon."                            | ""                                                 |
+| Minion     | Reveals they are a minion                                                  | "Ah, you caught me, but you will not find my master!" | ""                                                 |
+
+Special Clues:
+Special clues show up in the clue tracker as blue
+
 ## Maybe
 Challenge is timed, you have a certain amount of time to find the demon
 

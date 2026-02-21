@@ -79,7 +79,7 @@ export class Controls {
         this.worldData = worldData;
     }
 
-    public update(delta: number) {
+    public update(delta: number, agility: number = 1) {
         if (this.controls.isLocked === true) {
             this.velocity.x -= this.velocity.x * 10.0 * delta;
             this.velocity.z -= this.velocity.z * 10.0 * delta;
@@ -88,9 +88,15 @@ export class Controls {
             this.direction.x = Number(this.moveRight) - Number(this.moveLeft);
             this.direction.normalize();
 
+            // Acceleration maps Agility 1 -> 200.0 up to Agility 5 -> 400.0
+            const maxAgility = 5;
+            const baseAcc = 150.0;
+            const scalingAcc = 50.0; // 150 + (50 * 5) = 400 at max level
+            const currentAcc = baseAcc + (scalingAcc * Math.min(agility, maxAgility));
+
             // Acceleration
-            if (this.moveForward || this.moveBackward) this.velocity.z -= this.direction.z * 400.0 * delta;
-            if (this.moveLeft || this.moveRight) this.velocity.x -= this.direction.x * 400.0 * delta;
+            if (this.moveForward || this.moveBackward) this.velocity.z -= this.direction.z * currentAcc * delta;
+            if (this.moveLeft || this.moveRight) this.velocity.x -= this.direction.x * currentAcc * delta;
 
             const speedX = -this.velocity.x * delta;
             const speedZ = -this.velocity.z * delta;
@@ -151,9 +157,9 @@ export class Controls {
         ];
 
         for (const c of corners) {
-            // Use round to match visual center of tiles
-            const gridX = Math.round(c.x / this.tileSize);
-            const gridY = Math.round(c.y / this.tileSize);
+            // Use floor and assume wall covers [n, n+1)
+            const gridX = Math.floor(c.x / this.tileSize);
+            const gridY = Math.floor(c.y / this.tileSize);
 
             if (gridX < 0 || gridX >= this.worldData.width || gridY < 0 || gridY >= this.worldData.height) {
                 return true; // Out of bounds is collision
