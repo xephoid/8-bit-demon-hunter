@@ -2,16 +2,27 @@ Mini Burger
 
 
 Objective:
-Find the demon in the world.
+Find the demon and accuse them.
 
 People all have 5 attributes:
-- Location (town)
-- Favorite color
-- Pet
-- Occupation
-- Item
+- Location (town) - What town they are in. There are always 10 people per town.
+- Favorite color - Multiple people can have the same favorite color, but there are only 6 possible colors
+- Pet - Multiple people can have the same pet. There are 15 possible pets
+- Occupation - Only one per town (There is always one of each occupation in a town). Mayor, Barber, Soldier, Musician, Farmer, Blacksmith, Merchant, Tailor, Baker, Carpenter.
+- Item - Only one per person. No person has the same item.
 
-People give clues for who the demon is. Clue examples:
+People give clues about who the demon is. People who "know the truth" have the best clues and are never lying. The demon has minions. The demon and its minions will always lie. Their clue will contradict the truth.
+
+Keys:
+Mouse - Look around
+Left Click - Attack
+WASD - Move
+E - Interact (enter town or talk to person)
+C - Open Clue Book
+F - Level up (if available)
+Esc - Pause
+
+Clue examples:
 
 Good clues (only 5):
 - The demon is in this location
@@ -99,9 +110,7 @@ Task completions:
   
 Escort task expanded:
 - When the player activates the escort task the person will appear in the world outside the town they came from when the player next leaves the town
-- The person will follow the player at a distance, they move slower than the player
-- If the person is killed the task resets when the player next leaves a town
-- If the player dies the task also resets when the player respawns
+- The person will follow the player at a distance, they move at the same speed as the player
 - If the player reaches the destination with the person the task succeeds
 
 World Generation:
@@ -160,11 +169,11 @@ Base stats:
 - Range: 1
 
 Dev notes
-- The current hard coded speed is very fast. I Think it should be the max the player can get! But also the min should not be too slow. Will need to find a good balance.
+- Movement speed scales with the Agility stat and is configurable in `gameConfig.ts`.
 - When range is increased the attack sprite should move further away from the player. Initially it will flash directly in front of the player (currently implemented). At higher levels it will move out in front of the player in the direction the player is facing. The distance increases 1 tile per level.
 - All numbers (base stats, max stats, xp needed for level up, etc) should be configurable in the config file
 
-## NPC Powers (NEW)
+## NPC Powers
 Instead of NPC's giving the player items they can use powers to help the player. Powers are based on their occupation.
 
 Powers:
@@ -173,7 +182,7 @@ Powers:
 | Farmer     | Tells the player if they have met the demon                                | "You have/ have not met the demon yet."               | ""                                                 |
 | Musician   | Tells the player how many minions are in the current town                  | "There are [number] minions in this town."            | ""                                                 |
 | Barber     | Introduces the player to a random numer of people between 1 and 5          | "I have introduced you to [number] people."           | Adds the people to the clue tracker                |
-| Tailor     | Tells the player if someone in town is lying                               | "Some poeple/No one in this town are/is lying."       | Add to clue tracker (special clue)                 |
+| Tailor     | Tells the player if someone in town is lying                xcc            | "Some poeple/No one in this town are/is lying."       | Add to clue tracker (special clue)                 |
 | Mayor      | Introduces the player to everyone in town                                  | "I have introduced you to everyone in town."          | Adds all people in town to the clue tracker        |
 | Merchant   | Introduces the player to a random person from another town                 | "Let me introduce you to [name] from [town]."         | Adds the person to the clue tracker                |
 | Soldier    | Give the player 20 xp                                                      | "Nice training session!."                             | ""                                                 |
@@ -185,10 +194,92 @@ Powers:
 Special Clues:
 Special clues show up in the clue tracker as blue
 
+## Temples
+In addition to towns randomly in the world there will be temples. These will not be marked on the mini map. The map of each temple will be a maze generated using the drunken walk algorithm. Corridors will be 2 tiles wide and 2 tiles high. The start of the maze will be a random outer edge of the map and the end will be where the drunken walk algorithm stops. The exit will be at the start so the player can leave if they choose. At the end will be a chest with a specific magic item that will grant the player a permanent special power. The temple will also have a unique enemy (per temple).
+
+Temples:
+| Name         | Enemy            | Reward             | Reward Notes                                                                                                                                                                                                                                                                                                |
+| ------------ | ---------------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Sky Temple   | Bees             | Winged Boots       | Allows the player to fly. The player presses Q to ascend, then Q again to descend. Similar to the demon                                                                                                                                                                                                     |
+| Earth Temple | Man Eater Flower | Protection Aura    | The player can right click to become invulnerable while held. The player can't move or attack while invulnerable.                                                                                                                                                                                           |
+| Space Temple | Arachne          | Teleportation Cape | The player can fast travel to any town in the world by pressing X. A menu will pop up listing all the towns.                                                                                                                                                                                                |
+| Light Temple | Eye              | Eye of Truth       | When speaking to an NPC the player will know if they are lying. The rumor will be in red if the NPC is lying (both minion and demon rumors).                                                                                                                                                                |
+| Fire Temple  | Fire skull       | Fire Bombs         | The player can place fire bombs on the ground by pressing Z. The fire bomb will explode after 3 seconds and deal 5 damage to any enemy within 5 tiles. It will also destroy any walls within 5 tiles (overworld only). The player cannot place firebombs in towns. Only 1 firebomb can be active at a time. |
+
+Temple Enemies:
+| Name       | Health | Damage | XP  | Behavior                                                                                                             |
+| ---------- | ------ | ------ | --- | -------------------------------------------------------------------------------------------------------------------- |
+| Bee        | 6      | 1      | 5   | Like the demon, but no projectile or phases. When it charges moves as fast as the demon projectile.                  |
+| Plant      | 7      | 2      | 6   | Stays still until the player is within 5 tiles. Then it charges at the player until it hits a wall or the player.    |
+| Drider     | 10     | 2      | 10  | Wanders around until the player is within 5 tiles. Then it charges at the player until it hits a wall or the player. |
+| Eye        | 8      | 2      | 8   | Wanders around until the player is within 10 tiles. Then it Shoots a lazer blast at the player.                      |
+| Fire Skull | 5      | 2      | 5   | Moves in a straight line until it hits a wall then changes direction. Very fast.                                     |
+
+## Final Demon Fight
+If the player correctly accuses the demon the player will be teleported to a new area where they must fight the demon. This new area will have a black sky and there will be random red pilars (for now just red blocks 2 tiles high) scattered around the area. The demon will be in the center of the area. The demon will have 30 hp and 3 phases. 
+
+Phase 1 (20hp+):
+- If the player is withing 5 tiles the demon will charge at the player until it hits a wall or the player. The player must dodge the charge. The demon will then back up and charge again repeatedly. When it charges it should be as fast a soldier, but should back up at the speed of a snake.
+- If the player is outside of 5 tiles the demon will fly up 3 tiles and shoot an evil projectile (7 animation files in public/sprites/sliced/evilProjectile[1-7].png ) at the player. The projectile will travel in a straight line until it hits a wall or the player. The projectile should be as fast as a bandit.
+
+Phase 2 (10hp-20hp):
+- At the begining of this phase the demon will move to the center of the area and summon 3 random minions to fight the player.
+- Then the demon will resume it's phase 1 attacks.
+
+Phase 3 (0hp-10hp):
+- The demon will stay 2 tiles in the air and shoot 3 projectiles at the player in a spread pattern. The projectiles will travel in a straight line until they hit a wall or the player. The projectiles should be as fast as a bandit.
+
+Cheat codes:
+In order to test this without having to find the demon the player should be able to press ~ to focus an input where they can type commands. The commands should be (not case sensitive):
+- liliana: Teleports the player to the demon
+- urza: maxes out the player's stats
+- jace: reveals all good clues
+- passport [town_id]: Teleports the player to a town with the given id
+- krang: Immediately gives the player 100xp
+
 ## Maybe
+
+# NPC Abilities
+Different npcs have combat abilities they can use when being escorted:
+- Revives the player if they are dead (only once)
+- Damages an enemy the player has attacked
+- Heals the player if no enemies are close
+
+# NPC Conversation
+Add another option to the NPC dialog to Talk to the NPC. The NPC will tell you some lore about the town, the world, or the demon.
+
+# NPC Houses
+The towns already have a house for each person, but currently the door don't do anything. Add a way to open the door and interact with the house. Maybe the houses are locked and get unlocked when the player completes the NPC task. Maybe there is a way for the player to break in.
+Inside the house there could be an npc journal that the player can read to get more information about the town and the demon.
+
+# Town market / Town Hall
+There is one big building in each town. Currently the door does nothing. Add a new location type for the market and add a way to open the door and interact with the market. Maybe the market has a shop where the player can buy items.
+
+Should it be a full 3d building or just a door that opens to a shop?
+What items would be sold at the market?
+
+What would a town hall have?
+
+# Potions
+Add a new item type for potions. Potions can be used to heal the player. The player would have a potion supply and could use them to heal by pressing 1.
+
+Where do potions come from?
+
+# Magic item Slots
+Currently the player can collect as many magic items as they want. Add a limit to the number of magic items the player can have active at a time. The player can level up to unlock more slots. Possibly replaces Agility which isn't very useful.
+
+# Secret Locations
+Add secret locations the player can only reach by flying or by bombs.
+How to procedurally generate these locations?
+What would be in these locations?
+
+
+## Probably Not
+
+# Time Challenge
 Challenge is timed, you have a certain amount of time to find the demon
 
-Possible Progression:
+# Progression
 - Start with 2 towns and only blobs in the world (Limits task options)
 - Once you find the demo you unlock a dungeon and must find the demon and kill it
 - The dungeon is a maze with the demon as a boss

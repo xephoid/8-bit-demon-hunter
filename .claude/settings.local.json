@@ -1,7 +1,11 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npx tsc:*)"
+      "Bash(npx tsc:*)",
+      "Bash(python -c:*)",
+      "Bash(python -:*)",
+      "Bash(python:*)",
+      "Bash(ls:*)"
     ]
   }
 }

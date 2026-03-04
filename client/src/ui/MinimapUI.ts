@@ -37,7 +37,10 @@ export class MinimapUI {
         visitedPeople: Map<string, Person>,
         currentWorldId: string,
         focusedTownId: string | null = null,
-        walls: boolean[][] | null = null
+        walls: boolean[][] | null = null,
+        chestPos: { x: number; y: number } | null = null,
+        isTemple: boolean = false,
+        playerAngle: number = 0
     ) {
         // Clear
         this.ctx.clearRect(0, 0, this.size, this.size);
@@ -79,6 +82,7 @@ export class MinimapUI {
         this.ctx.fillStyle = '#00FF00';
         doors.forEach(door => {
             if (door.type === 'house') return; // Hide house doors
+            if (door.noMinimap) return;        // Hide temple entrances (not on map)
             const p = toMap(door.x, door.y);
             this.ctx.beginPath();
             this.ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
@@ -113,8 +117,15 @@ export class MinimapUI {
                 if (activeTask.type === 'ESCORT') {
                     // For escort tasks: point to the DESTINATION town, not the giver's origin
                     if (cWorldId === activeTask.targetId) {
-                        // Already at destination — no marker needed
-                        targetLoc = null;
+                        // At destination — show where the escorted NPC is so the player can find them
+                        const entity = entities.find(e =>
+                            e.data && e.data.properties && e.data.properties.personId === activeTask.giverId
+                        );
+                        if (entity) {
+                            targetLoc = entity.data
+                                ? { x: entity.data.x, y: entity.data.y }
+                                : { x: entity.x, y: entity.y };
+                        }
                     } else if (cWorldId.includes('world')) {
                         // In overworld: point to destination town door
                         const door = doors.find(d => d.target === activeTask.targetId);
@@ -167,14 +178,55 @@ export class MinimapUI {
         }
 
 
-        // 3. Draw Player (Blue Dot)
-        // Player pos is usually in world units * 2 in ThreeJS, but updated here from 'playerPos' arg
-        // Assumption: playerPos passed in is in GRID coords (same as entities)
+        // 3. Draw Temple Chest (White Dot) — visible once all temple enemies are cleared
+        if (chestPos) {
+            const cp = toMap(chestPos.x, chestPos.y);
+            this.ctx.fillStyle = '#FFFFFF';
+            this.ctx.beginPath();
+            this.ctx.arc(cp.x, cp.y, 5, 0, Math.PI * 2);
+            this.ctx.fill();
+            this.ctx.strokeStyle = '#FFFFFF';
+            this.ctx.lineWidth = 1.5;
+            this.ctx.beginPath();
+            this.ctx.arc(cp.x, cp.y, 8, 0, Math.PI * 2);
+            this.ctx.stroke();
+        }
+
+        // 4. Draw Temple Enemies (Red Dots)
+        if (isTemple) {
+            const TEMPLE_ENEMY_TYPES = ['bee', 'man_eater_flower', 'arachne', 'eyeball', 'fire_skull'];
+            this.ctx.fillStyle = '#FF2222';
+            entities.forEach(e => {
+                if (!TEMPLE_ENEMY_TYPES.includes(e.data?.type)) return;
+                if (e.data?.properties?.isDying || (e.data?.properties?.hp ?? 1) <= 0) return;
+                const ep = toMap(e.data.x, e.data.y);
+                this.ctx.beginPath();
+                this.ctx.arc(ep.x, ep.y, 3, 0, Math.PI * 2);
+                this.ctx.fill();
+            });
+        }
+
+        // 5. Draw Player (Blue Arrow)
+        // playerAngle is a pre-computed canvas rotation angle passed in from main.ts
         const pp = toMap(playerPos.x, playerPos.y);
-        this.ctx.fillStyle = '#0000FF';
+
+        this.ctx.save();
+        this.ctx.translate(pp.x, pp.y);
+        this.ctx.rotate(playerAngle);
+
+        // Triangle pointing up in local space → points toward the player's facing direction
+        this.ctx.fillStyle = '#4488FF';
+        this.ctx.strokeStyle = '#FFFFFF';
+        this.ctx.lineWidth = 1;
         this.ctx.beginPath();
-        this.ctx.arc(pp.x, pp.y, 5, 0, Math.PI * 2);
+        this.ctx.moveTo(0, -8);   // tip (forward)
+        this.ctx.lineTo(-5, 5);   // back-left
+        this.ctx.lineTo(5, 5);    // back-right
+        this.ctx.closePath();
         this.ctx.fill();
+        this.ctx.stroke();
+
+        this.ctx.restore();
     }
 
     public toggle(visible: boolean) {

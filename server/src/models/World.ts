@@ -4,7 +4,7 @@ export interface IWorld extends Document {
     customId: string;
     width: number;
     height: number;
-    type: 'world' | 'city';
+    type: 'world' | 'city' | 'temple';
     biome: 'grass' | 'snow' | 'desert';
     walls: boolean[][]; // 2D grid of walls (true = wall, false = empty)
     doors: any[]; // List of doors/portals

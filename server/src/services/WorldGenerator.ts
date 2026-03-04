@@ -13,12 +13,16 @@ export class WorldGenerator {
         this.height = gameConfig.world.height;
     }
 
-    public async generateDemonHunterWorld(): Promise<any> {
+    public async generateDemonHunterWorld(sessionId: string): Promise<any> {
         // 1. Generate Towns
         const towns: Town[] = [];
         const townCount = gameConfig.world.roomCount;
         const townNameRegistry = [...gameConfig.townNameRegistry];
         this.shuffle(townNameRegistry);
+
+        // Build a shuffled pool from the skin registry so every NPC gets a distinct, gender-tagged skin
+        const skinPool = [...gameConfig.characterSkinRegistry];
+        this.shuffle(skinPool);
 
         for (let i = 0; i < townCount; i++) {
             const name = i < townNameRegistry.length ? townNameRegistry[i] : `Town ${i + 1}`;
@@ -36,7 +40,7 @@ export class WorldGenerator {
             };
 
             // 2. Generate People for this town
-            town.people = this.generatePeople(town.id, pop);
+            town.people = this.generatePeople(town.id, pop, skinPool);
             towns.push(town);
         }
 
@@ -54,7 +58,7 @@ export class WorldGenerator {
             gameOver: false,
             gameWon: false
         };
-        GameState.setState(state);
+        GameState.setState(sessionId, state);
 
         // Return the MAIN WORLD (Overworld) acting as the hub
         // Return the MAIN WORLD (Overworld) acting as the hub
@@ -127,7 +131,9 @@ export class WorldGenerator {
     public generatePopulatedTown(id: string, name: string): IWorld {
         const pop = 10;
         const townData = this.generateTown(id, name, pop);
-        const people = this.generatePeople(id, pop);
+        const localSkinPool = [...gameConfig.characterSkinRegistry];
+        this.shuffle(localSkinPool);
+        const people = this.generatePeople(id, pop, localSkinPool);
 
         // Add people to entities list
         const entities = people.map(p => {
@@ -177,7 +183,7 @@ export class WorldGenerator {
         });
     }
 
-    private generatePeople(townId: string, count: number): Person[] {
+    private generatePeople(townId: string, count: number, skinPool: Array<{ row: number; skin: number; gender: string }> = []): Person[] {
         const people: Person[] = [];
         const occupations = Object.values(Occupation);
 
@@ -213,31 +219,21 @@ export class WorldGenerator {
             const task = this.generateKillTask(townId, i, monsterType, monsterName, monsterToKill);
             task.giverId = personId;
 
-            // Character Sprites
-            // 24 Rows (0-23)
-            // 26 Skins per Row (0-25) -> Cols = Skin * 3 + [0,1,2]
+            // Character Sprites — pick a skin whose gender matches the name's gender
+            // Priority: exact gender match → 'either' skin → 'either' name → any remaining
+            let skinIdx = skinPool.findIndex(s =>
+                s.gender === gender || s.gender === 'either' || gender === 'either'
+            );
+            if (skinIdx === -1) skinIdx = 0; // fallback: pool nearly exhausted, take anything
+            const skinEntry = skinPool.splice(skinIdx, 1)[0] ?? {
+                row: Math.random() < 0.5 ? 0 : 12,
+                skin: Math.floor(Math.random() * 26),
+                gender: 'either'
+            };
+            const row = skinEntry.row;
+            const skin = skinEntry.skin;
 
-            // Randomly select a row and skin
-            const maxRows = 24;
-            const maxSkinsPerRow = 26;
-
-            const row = Math.floor(Math.random() * maxRows);
-            const skin = Math.floor(Math.random() * maxSkinsPerRow);
-
-            // Store as "character_ROW_SKIN" so client can parse it
-            // Client expects "character_ROW" as base? 
-            // Previous fix used: match(/character_(\d+)/) -> treated as ID
-            // And calculated: (ID * 3) + 2.
-
-            // New logic needs to conform to what EntityManager expects.
-            // EntityManager currently parses: character_(\d+) -> int(ID).
-            // Then accesses: character_0_{ID*3 + 2} (Hardcoded 0 row).
-
-            // We need to send a format that EntityManager can parse for ROW and SKIN.
-            // OR update EntityManager to handle "character_ROW_SKIN".
-
-            // Let's use format: "character_ROW_SKIN"
-            const spriteId = `character_${row}_${skin}`; // e.g. character_5_12
+            const spriteId = `character_${row}_${skin}`;
 
             people.push({
                 id: personId,
@@ -391,8 +387,16 @@ export class WorldGenerator {
         const numCities = townDetails.length > 0 ? townDetails.length : gameConfig.world.roomCount;
 
         for (let i = 0; i < numCities; i++) {
-            const doorX = Math.floor(Math.random() * (this.width - 20)) + 10;
-            const doorY = Math.floor(Math.random() * (this.height - 20)) + 10;
+            let doorX: number, doorY: number;
+            let cityAttempts = 0;
+            do {
+                doorX = Math.floor(Math.random() * (this.width - 20)) + 10;
+                doorY = Math.floor(Math.random() * (this.height - 20)) + 10;
+                cityAttempts++;
+            } while (
+                cityAttempts < 100 &&
+                cities.some(c => Math.sqrt((c.x - doorX) ** 2 + (c.y - doorY) ** 2) < 10)
+            );
 
             this.carveCircle(walls, doorX, doorY, 5);
             cities.push({ x: doorX, y: doorY });
@@ -419,8 +423,79 @@ export class WorldGenerator {
             this.carvePath(walls, start.x, start.y, end.x, end.y);
         }
 
-        // 4. Place Entities (Enemies/NPCs)
-        // 4. Place Entities (Enemies/NPCs)
+        // Add 3 random waypoints and connect each to its nearest city to expand the world
+        for (let w = 0; w < 3; w++) {
+            const wx = Math.floor(Math.random() * (this.width - 20)) + 10;
+            const wy = Math.floor(Math.random() * (this.height - 20)) + 10;
+            const nearest = cities.reduce((best, c) =>
+                Math.sqrt((c.x - wx) ** 2 + (c.y - wy) ** 2) <
+                Math.sqrt((best.x - wx) ** 2 + (best.y - wy) ** 2) ? c : best
+            );
+            this.carvePath(walls, nearest.x, nearest.y, wx, wy);
+        }
+
+        // 4a. Place 5 temples (not marked on minimap)
+        const templeList = [
+            { id: 'temple_sky',   name: 'Sky Temple' },
+            { id: 'temple_earth', name: 'Earth Temple' },
+            { id: 'temple_space', name: 'Space Temple' },
+            { id: 'temple_light', name: 'Light Temple' },
+            { id: 'temple_fire',  name: 'Fire Temple' },
+        ];
+        const templeLocs: { x: number, y: number }[] = [];
+        for (const temple of templeList) {
+            let tx = 0, ty = 0;
+            let templeAttempts = 0;
+            do {
+                tx = Math.floor(Math.random() * (this.width - 20)) + 10;
+                ty = Math.floor(Math.random() * (this.height - 20)) + 10;
+                templeAttempts++;
+            } while (
+                templeAttempts < 100 && (
+                    cities.some(c => Math.sqrt((c.x - tx) ** 2 + (c.y - ty) ** 2) < 12) ||
+                    templeLocs.some(t => Math.sqrt((t.x - tx) ** 2 + (t.y - ty) ** 2) < 12)
+                )
+            );
+
+            this.carveCircle(walls, tx, ty, 3);
+            templeLocs.push({ x: tx, y: ty });
+
+            // Connect to nearest city so the temple is reachable
+            const nearest = cities.reduce((best, c) =>
+                Math.sqrt((c.x - tx) ** 2 + (c.y - ty) ** 2) <
+                Math.sqrt((best.x - tx) ** 2 + (best.y - ty) ** 2) ? c : best
+            );
+            this.carvePath(walls, nearest.x, nearest.y, tx, ty);
+
+            doors.push({
+                x: tx,
+                y: ty,
+                id: temple.id,
+                target: temple.id,
+                type: 'temple',
+                targetName: temple.name,  // Floating label in world
+                noMinimap: true           // Hidden from minimap per design
+            });
+        }
+
+        // 4. Determine player spawn first so enemy distance rules can reference it
+        let playerSpawn = cities[0]; // fallback
+        for (let attempt = 0; attempt < 500; attempt++) {
+            const sx = Math.floor(Math.random() * (this.width - 2)) + 1;
+            const sy = Math.floor(Math.random() * (this.height - 2)) + 1;
+            if (!walls[sx][sy] && !walls[sx + 1][sy] && !walls[sx - 1][sy]
+                               && !walls[sx][sy + 1] && !walls[sx][sy - 1]) {
+                playerSpawn = { x: sx, y: sy };
+                break;
+            }
+        }
+
+        const SPAWN_MIN_DIST: Record<string, number> = {
+            slime: 10, mushroom: 15, snake: 20,
+            dude: 30, chick: 30, druid: 35, skeleton: 40, soldier: 45,
+        };
+
+        // 5. Place Entities (Enemies/NPCs)
         const entities: any[] = [];
 
         const spawnEntity = (type: string) => {
@@ -437,16 +512,18 @@ export class WorldGenerator {
             }
 
             while (!placed && attempts < 50) {
-                const ex = Math.floor(Math.random() * this.width);
-                const ey = Math.floor(Math.random() * this.height);
+                const ex = 1 + Math.floor(Math.random() * (this.width - 2));
+                const ey = 1 + Math.floor(Math.random() * (this.height - 2));
 
                 if (!walls[ex][ey]) {
-                    const tooClose = cities.some(c => Math.sqrt((c.x - ex) ** 2 + (c.y - ey) ** 2) < 8);
+                    const tooClose = doors.some(d => Math.sqrt((d.x - ex) ** 2 + (d.y - ey) ** 2) < 8);
+                    const minDist = SPAWN_MIN_DIST[type] ?? 10;
+                    const tooCloseToPlayer = Math.sqrt((playerSpawn.x - ex) ** 2 + (playerSpawn.y - ey) ** 2) < minDist;
 
                     // Also check neighbors
                     const isClear = !walls[ex + 1][ey] && !walls[ex - 1][ey] && !walls[ex][ey + 1] && !walls[ex][ey - 1];
 
-                    if (!tooClose && isClear) {
+                    if (!tooClose && !tooCloseToPlayer && isClear) {
                         entities.push({
                             type: type,
                             name: `${type}_${entities.length}`,
@@ -461,29 +538,57 @@ export class WorldGenerator {
             }
         };
 
-        // Spawn based on enemy config max values
-        gameConfig.enemies.forEach(enemy => {
-            for (let i = 0; i < enemy.max; i++) {
-                spawnEntity(enemy.id);
-            }
-        });
+        // Spawn bandits as male+female pairs close to each other
+        const dudeConfig = gameConfig.enemies.find(e => e.id === 'dude');
+        const chickConfig = gameConfig.enemies.find(e => e.id === 'chick');
+        const pairCount = Math.min(dudeConfig?.max ?? 0, chickConfig?.max ?? 0);
 
-        // Calculate safe random spawn point for player
-        let playerSpawn = cities[0]; // Fallback
-        let spawnAttempts = 0;
-        while (spawnAttempts < 500) {
-            const sx = Math.floor(Math.random() * (this.width - 2)) + 1;
-            const sy = Math.floor(Math.random() * (this.height - 2)) + 1;
-
-            if (!walls[sx][sy] && !walls[sx + 1][sy] && !walls[sx - 1][sy] && !walls[sx][sy + 1] && !walls[sx][sy - 1]) {
-                const tooCloseToEnemy = entities.some((e: any) => Math.sqrt((e.x - sx) ** 2 + (e.y - sy) ** 2) < 15);
-                if (!tooCloseToEnemy) {
-                    playerSpawn = { x: sx, y: sy };
+        const spawnBanditPair = () => {
+            // Find anchor for the male
+            let ax = -1, ay = -1;
+            for (let attempt = 0; attempt < 100; attempt++) {
+                const ex = Math.floor(Math.random() * (this.width - 2)) + 1;
+                const ey = Math.floor(Math.random() * (this.height - 2)) + 1;
+                const tooClose = doors.some(d => Math.sqrt((d.x - ex) ** 2 + (d.y - ey) ** 2) < 8);
+                const tooCloseToPlayer = Math.sqrt((playerSpawn.x - ex) ** 2 + (playerSpawn.y - ey) ** 2) < SPAWN_MIN_DIST['dude'];
+                if (!walls[ex][ey] && !tooClose && !tooCloseToPlayer &&
+                    !walls[ex + 1][ey] && !walls[ex - 1][ey] && !walls[ex][ey + 1] && !walls[ex][ey - 1]) {
+                    ax = ex; ay = ey;
                     break;
                 }
             }
-            spawnAttempts++;
-        }
+            if (ax === -1) return;
+
+            entities.push({ type: 'dude', name: `dude_${entities.length}`, x: ax, y: ay, properties: { hp: dudeConfig!.hp, xp: dudeConfig!.xp } });
+
+            // Place female within radius 1-4 of the male
+            let placed = false;
+            for (let r = 1; r <= 4 && !placed; r++) {
+                for (let dx = -r; dx <= r && !placed; dx++) {
+                    for (const dy of [r - Math.abs(dx), -(r - Math.abs(dx))]) {
+                        const cx = ax + dx, cy = ay + dy;
+                        if (cx > 0 && cx < this.width - 1 && cy > 0 && cy < this.height - 1 &&
+                            !walls[cx][cy] && !walls[cx + 1][cy] && !walls[cx - 1][cy] && !walls[cx][cy + 1] && !walls[cx][cy - 1]) {
+                            entities.push({ type: 'chick', name: `chick_${entities.length}`, x: cx, y: cy, properties: { hp: chickConfig!.hp, xp: chickConfig!.xp } });
+                            placed = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (!placed) spawnEntity('chick'); // fallback: independent spawn
+        };
+
+        for (let i = 0; i < pairCount; i++) spawnBanditPair();
+
+        // Spawn all other enemy types normally (skip bandits, already handled above)
+        gameConfig.enemies.forEach(enemy => {
+            if (enemy.id === 'dude' || enemy.id === 'chick') return;
+            if ((enemy as any).templeOnly) return;
+            for (let i = 0; i < (enemy.max ?? 0); i++) {
+                spawnEntity(enemy.id);
+            }
+        });
 
         const world = new World({
             customId: 'world_main',
@@ -497,6 +602,144 @@ export class WorldGenerator {
         });
 
         return world;
+    }
+
+    public generateTempleMaze(templeId: string): IWorld {
+        const mazeW = 40;
+        const mazeH = 40;
+
+        // All walls to start
+        const walls: boolean[][] = Array(mazeW).fill(null).map(() => Array(mazeH).fill(true));
+
+        // Pick start on a random outer edge (stay 3 tiles from corners for 2x2 carving room)
+        const side = Math.floor(Math.random() * 4);
+        let sx: number, sy: number;
+        let dx: number, dy: number;
+        if (side === 0) {
+            sx = 1; sy = Math.floor(Math.random() * (mazeH - 8)) + 4;
+            dx = 1; dy = 0;
+        } else if (side === 1) {
+            sx = mazeW - 3; sy = Math.floor(Math.random() * (mazeH - 8)) + 4;
+            dx = -1; dy = 0;
+        } else if (side === 2) {
+            sx = Math.floor(Math.random() * (mazeW - 8)) + 4; sy = 1;
+            dx = 0; dy = 1;
+        } else {
+            sx = Math.floor(Math.random() * (mazeW - 8)) + 4; sy = mazeH - 3;
+            dx = 0; dy = -1;
+        }
+
+        // Carve a 2x2 block to create 2-tile-wide corridors
+        const carve2x2 = (x: number, y: number) => {
+            for (let ox = 0; ox < 2; ox++) {
+                for (let oy = 0; oy < 2; oy++) {
+                    const nx = x + ox, ny = y + oy;
+                    if (nx >= 1 && nx < mazeW - 1 && ny >= 1 && ny < mazeH - 1) {
+                        walls[nx][ny] = false;
+                    }
+                }
+            }
+        };
+
+        const dirs: [number, number][] = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+        let cx = sx, cy = sy;
+        carve2x2(cx, cy);
+
+        // Drunken walk: move 2 tiles at a time to maintain 2-wide corridors
+        for (let step = 0; step < 500; step++) {
+            if (Math.random() < 0.3) {
+                [dx, dy] = dirs[Math.floor(Math.random() * 4)];
+            }
+
+            const nx = cx + dx * 2;
+            const ny = cy + dy * 2;
+
+            if (nx >= 1 && nx < mazeW - 2 && ny >= 1 && ny < mazeH - 2) {
+                carve2x2(cx + dx, cy + dy); // connector between steps
+                cx = nx; cy = ny;
+                carve2x2(cx, cy);
+            } else {
+                [dx, dy] = dirs[Math.floor(Math.random() * 4)]; // bounce
+            }
+        }
+
+        const templeType = templeId.replace('temple_', '');
+
+        const enemyTypeMap: Record<string, string> = {
+            sky:   'bee',
+            earth: 'man_eater_flower',
+            space: 'arachne',
+            light: 'eyeball',
+            fire:  'fire_skull',
+        };
+        const enemyType = enemyTypeMap[templeType] || 'slime';
+        const enemyCfg = gameConfig.enemies.find(e => e.id === enemyType);
+
+        // Pre-calculate door position so it can be used in the spawn distance filter
+        let doorX: number, doorY: number;
+        if      (side === 0) { doorX = 0;          doorY = sy; }
+        else if (side === 1) { doorX = mazeW - 1;  doorY = sy; }
+        else if (side === 2) { doorX = sx;          doorY = 0; }
+        else                 { doorX = sx;          doorY = mazeH - 1; }
+
+        // Collect open tiles away from start, chest, and door, then shuffle
+        const openTiles: { x: number; y: number }[] = [];
+        for (let x = 1; x < mazeW - 1; x++) {
+            for (let y = 1; y < mazeH - 1; y++) {
+                if (!walls[x][y]) {
+                    const distStart = Math.abs(x - sx) + Math.abs(y - sy);
+                    const distChest = Math.abs(x - cx) + Math.abs(y - cy);
+                    const distDoor  = Math.abs(x - doorX) + Math.abs(y - doorY);
+                    if (distStart >= 4 && distChest >= 2 && distDoor >= 8) openTiles.push({ x, y });
+                }
+            }
+        }
+        for (let i = openTiles.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [openTiles[i], openTiles[j]] = [openTiles[j], openTiles[i]];
+        }
+
+        const entities: any[] = [{
+            type: 'chest_temple',
+            name: 'Treasure Chest',
+            x: cx,
+            y: cy,
+            properties: { templeType }
+        }];
+
+        const spawnCount = Math.min(enemyCfg?.max ?? 6, openTiles.length);
+        for (let i = 0; i < spawnCount; i++) {
+            entities.push({
+                type: enemyType,
+                name: enemyCfg?.name || enemyType,
+                x: openTiles[i].x,
+                y: openTiles[i].y,
+                properties: { hp: enemyCfg?.hp ?? 5, xp: enemyCfg?.xp ?? 3 }
+            });
+        }
+
+        // Place the exit door at the actual outer boundary wall (never carved by carve2x2)
+        // so it sits in the wall rather than floating in the open corridor.
+        // (doorX/doorY already calculated above for spawn distance filtering)
+
+        const doors: any[] = [{
+            x: doorX,
+            y: doorY,
+            id: `exit_${templeId}`,
+            target: 'world_main',
+            type: 'temple_exit'
+        }];
+
+        return new World({
+            customId: templeId,
+            width: mazeW,
+            height: mazeH,
+            type: 'temple',
+            walls,
+            doors,
+            spawnPoints: [{ x: sx, y: sy }],
+            entities
+        });
     }
 
     private carveCircle(walls: boolean[][], x: number, y: number, radius: number) {
@@ -525,7 +768,7 @@ export class WorldGenerator {
             else if (y > y2) y--;
 
             // Wiggle radius
-            if (Math.random() < 0.1) targetSize = Math.floor(Math.random() * 3) + 2;
+            if (Math.random() < 0.1) targetSize = Math.floor(Math.random() * 10) + 2;
 
             this.carveCircle(walls, x, y, targetSize);
         }

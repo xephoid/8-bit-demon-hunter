@@ -11,6 +11,7 @@ export class DialogueUI {
     // Callbacks
     public onAcceptTask: ((task: GameTask) => void) | null = null;
     public onCompleteTask: ((person: Person, rewardType: 'CLUE' | 'POWER') => string | void) | null = null;
+    public onTaskCompleted: (() => void) | null = null;
     public onClose: (() => void) | null = null;
 
     constructor() {
@@ -74,7 +75,6 @@ export class DialogueUI {
         this.container.appendChild(rightCol);
 
         this.infoEl = document.createElement('div');
-        this.infoEl.style.whiteSpace = 'pre-wrap';
         rightCol.appendChild(this.infoEl);
     }
 
@@ -86,25 +86,40 @@ export class DialogueUI {
     }
 
     private getPowerOffer(person: Person): string {
-        if (person.isMinion) return "I have something to confess.";
+        //if (person.isMinion) return "I have something to confess.";
         return OccupationConfig[person.attributes.occupation]?.powerOffer ?? "use my ability";
     }
 
-    public show(person: Person, activeTask: GameTask | null, items: any[], towns: any[]) {
+    public show(person: Person, activeTask: GameTask | null, items: any[], towns: any[], hasEyeOfTruth: boolean = false) {
         this.container.style.display = 'flex';
         this.isOpen = true;
-        this.nameEl.innerText = `${person.name} the ${person.attributes.occupation}`;
+
+        this.nameEl.innerText = `${person.name} the ${person.attributes.occupation} ` + (person.isMinion && person.taskCompleted ? "(Minion)" : "");
 
         // Populate attribute info panel
         const itemName = items.find(i => i.id === person.attributes.item)?.name || person.attributes.item || "None";
         const townName = towns?.find(t => t.id === person.attributes.townId)?.name || person.attributes.townId;
-        this.infoEl.innerText = Dialogue.attributePanel(
-            person.attributes.pet,
-            person.attributes.color,
-            itemName,
-            townName,
-            person.clues?.bad?.text ?? Dialogue.noClue
-        );
+        const clueText = person.clues?.bad?.text ?? Dialogue.noClue;
+        const revealEvil = hasEyeOfTruth && (person.isDemon || person.isMinion);
+        const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        const row = (label: string, value: string) =>
+            `<tr>
+              <td style="color:#888;padding:4px 10px 4px 0;white-space:nowrap;vertical-align:top;">${label}</td>
+              <td style="color:#eee;vertical-align:top;">${value}</td>
+            </tr>`;
+        const attrHtml =
+            `<div style="color:#aaa;border-bottom:1px solid #444;padding-bottom:5px;margin-bottom:8px;letter-spacing:1px;">ATTRIBUTES</div>` +
+            `<table style="border-collapse:collapse;width:100%;margin-bottom:14px;">` +
+            row('Pet', esc(person.attributes.pet)) +
+            row('Color', esc(person.attributes.color)) +
+            row('Item', esc(itemName)) +
+            row('Town', esc(townName)) +
+            `</table>`;
+        const rumorColor = revealEvil ? '#ff4444' : person.clues?.good ? '#44ff88' : '#aaa';
+        const rumorHtml =
+            `<div style="color:${rumorColor};border-top:1px solid #444;padding-top:8px;line-height:1.8;">` +
+            `<span style="color:#888;">Rumor</span><br>&ldquo;${esc(clueText)}&rdquo;</div>`;
+        this.infoEl.innerHTML = attrHtml + rumorHtml;
 
         this.optionsEl.innerHTML = '';
         this.textEl.innerHTML = '';
@@ -126,6 +141,7 @@ export class DialogueUI {
                     addButton(Dialogue.buttons.iFoundYou, () => {
                         activeTask.currentAmount = activeTask.amount;
                         activeTask.isCompleted = true;
+                        if (this.onTaskCompleted) this.onTaskCompleted();
                         this.textEl.innerText = Dialogue.foundConfirmed;
                         this.optionsEl.innerHTML = '';
                         addButton(Dialogue.buttons.goodbye, () => this.hide());

@@ -27,6 +27,19 @@ export class EntityManager {
     public activeEntities: EntityState[] = [];
     public follower: EntityState | null = null;
 
+    /** Called when any non-person entity takes a hit. Receives the entity type. */
+    public onEntityHit: ((type: string) => void) | null = null;
+    /** Called when a druid (wizard) successfully teleports. */
+    public onEntityTeleport: (() => void) | null = null;
+    /** Called when an enemy fires a projectile. Receives the projectile type. */
+    public onEntityShoot: ((type: 'fireball' | 'arrow' | 'evil' | 'eye_lazer') => void) | null = null;
+    /** Called once when the demon boss transitions to phase 2 (minion summon). */
+    public onDemonPhase2: (() => void) | null = null;
+    /** Called the moment the demon's death animation begins (before it finishes). */
+    public onDemonDying: (() => void) | null = null;
+    /** World position of the arena centre — set by main.ts when building the arena. */
+    public arenaCenter: { x: number; z: number } = { x: 31, z: 31 };
+
     // Grid System
     private tileSize = 2; // Matches map scale
     private currentWalls: boolean[][] | null = null;
@@ -57,7 +70,8 @@ export class EntityManager {
             this.scene.remove(e.sprite);
         });
         this.activeEntities = [];
-        this.projectiles = []; // Clear projectiles
+        this.projectiles.forEach(p => this.scene.remove(p.sprite));
+        this.projectiles = [];
 
         if (this.follower) {
             this.scene.remove(this.follower.sprite);
@@ -65,6 +79,23 @@ export class EntityManager {
         }
 
         entitiesData.forEach(data => this.spawnEntity(data));
+    }
+
+    public addEntity(data: EntityData): void {
+        this.spawnEntity(data);
+    }
+
+    /** Instantly remove all non-person entities and clear all projectiles (e.g. on demon kill). */
+    public clearEnemies(): void {
+        for (let i = this.activeEntities.length - 1; i >= 0; i--) {
+            const e = this.activeEntities[i];
+            if (e.data.type !== 'person') {
+                this.scene.remove(e.sprite);
+                this.activeEntities.splice(i, 1);
+            }
+        }
+        this.projectiles.forEach(p => this.scene.remove(p.sprite));
+        this.projectiles.length = 0;
     }
 
     public spawnFollower(person: any) {
@@ -145,6 +176,10 @@ export class EntityManager {
                     }
                 }
             }
+        } else if (data.type === 'chest_temple') {
+            const templeType = data.properties?.templeType ?? '';
+            texture = this.assetManager.getTexture(`chest_temple_${templeType}_closed`)
+                   ?? this.assetManager.getTexture('chest_brown_closed');
         } else {
             texture = this.getTextureForState(data.type, 'down', 0);
         }
@@ -157,7 +192,15 @@ export class EntityManager {
                 1,
                 (data.y * this.tileSize) + (this.tileSize / 2)
             );
-            sprite.scale.set(1.5, 1.5, 1);
+            const TEMPLE_ENEMY_TYPES = ['bee', 'man_eater_flower', 'arachne', 'eyeball', 'fire_skull'];
+            const spriteScale = data.type === 'demon' ? 5.0
+                : TEMPLE_ENEMY_TYPES.includes(data.type) ? 3.0
+                : data.type === 'chest_temple' ? 2.0
+                : 1.5;
+            sprite.scale.set(spriteScale, spriteScale, 1);
+
+            // Chest starts hidden until all temple enemies are cleared
+            if (data.type === 'chest_temple') sprite.visible = false;
 
             // --- NPC LABEL LOGIC ---
             if (data.type === 'person') {
@@ -178,6 +221,41 @@ export class EntityManager {
                 }
             });
         }
+    }
+
+    /** Make the temple chest visible (called when all temple enemies are defeated).
+     *  Returns the chest's grid position for the minimap, or null if not found. */
+    public revealTempleChest(): { x: number; y: number } | null {
+        const chest = this.activeEntities.find(e => e.data.type === 'chest_temple');
+        if (!chest) return null;
+        chest.sprite.visible = true;
+        return { x: chest.data.x, y: chest.data.y };
+    }
+
+    /** Return the chest entity data if the player is within 3 units and the chest is visible. */
+    public checkForChest(playerPos: THREE.Vector3): EntityData | null {
+        for (const entity of this.activeEntities) {
+            if (entity.data.type === 'chest_temple' && entity.sprite.visible) {
+                if (entity.sprite.position.distanceTo(playerPos) < 3) {
+                    return entity.data;
+                }
+            }
+        }
+        return null;
+    }
+
+    /** Switch chest to open texture then remove it from the scene after a brief delay. */
+    public collectTempleChest(templeType: string): void {
+        const idx = this.activeEntities.findIndex(e => e.data.type === 'chest_temple');
+        if (idx === -1) return;
+        const chest = this.activeEntities[idx];
+        const openTex = this.assetManager.getTexture(`chest_temple_${templeType}_open`);
+        if (openTex) (chest.sprite.material as THREE.SpriteMaterial).map = openTex;
+        setTimeout(() => {
+            this.scene.remove(chest.sprite);
+            const i = this.activeEntities.indexOf(chest);
+            if (i !== -1) this.activeEntities.splice(i, 1);
+        }, 600);
     }
 
     private createNameLabel(text: string, color: string): THREE.Sprite {
@@ -235,9 +313,14 @@ export class EntityManager {
         return this.assetManager.getTexture(key) || this.assetManager.getTexture(`enemy_${type}`); // Fallback
     }
 
-    public spawnProjectile(x: number, z: number, dir: THREE.Vector3, type: 'fireball' | 'arrow' | 'slash', isPlayer: boolean = false, rangeMod: number = 1) {
-        let textureKey = type === 'fireball' ? 'projectile_fireball' : 'projectile_arrow';
+    public spawnProjectile(x: number, z: number, dir: THREE.Vector3, type: 'fireball' | 'arrow' | 'slash' | 'evil' | 'eye_lazer', isPlayer: boolean = false, rangeMod: number = 1, spawnY?: number, sourceType?: string) {
+        let textureKey = type === 'fireball' ? 'projectile_fireball' : (type === 'evil' ? 'projectile_evil_0' : 'projectile_arrow');
         if (type === 'slash') textureKey = 'slash';
+        if (type === 'eye_lazer') {
+            const absDx = Math.abs(dir.x), absDz = Math.abs(dir.z);
+            if (absDx >= absDz) textureKey = dir.x > 0 ? 'eye_lazer_right' : 'eye_lazer_side';
+            else textureKey = dir.z > 0 ? 'eye_lazer_down' : 'eye_lazer_up';
+        }
 
         const texture = this.assetManager.getTexture(textureKey) || this.dummyTexture;
 
@@ -252,7 +335,7 @@ export class EntityManager {
                 side: THREE.DoubleSide
             });
             const mesh = new THREE.Mesh(geometry, material);
-            const yPos = type === 'slash' ? 1.0 : 1.5;
+            const yPos = spawnY !== undefined ? spawnY : (type === 'slash' ? 1.0 : 1.5);
             mesh.position.set(x, yPos, z);
 
             const target = new THREE.Vector3(x, yPos, z).add(dir);
@@ -274,7 +357,7 @@ export class EntityManager {
                 color: 0xffffff
             });
             const sprite = new THREE.Sprite(material);
-            sprite.position.set(x, 1, z);
+            sprite.position.set(x, spawnY ?? 1, z);
             sprite.scale.set(0.8, 0.8, 1);
             object = sprite;
         }
@@ -286,21 +369,41 @@ export class EntityManager {
         const baseLife = type === 'slash' ? 0.15 : 3.0;
         const lifeBonus = type === 'slash' ? (rangeMod - 1) * 0.12 : 0;
 
-        this.projectiles.push({
+        const proj: any = {
             sprite: object,
             dir: dir.clone(),
             life: baseLife + lifeBonus,
-            speed: type === 'slash' ? 12.0 : (type === 'fireball' ? 6.0 : 8.0),
+            speed: type === 'slash' ? 12.0 : (type === 'fireball' ? 6.0 : (type === 'evil' ? 16.0 : (type === 'eye_lazer' ? 10.0 : 8.0))),
             type: type,
-            isPlayer: isPlayer
-        });
+            isPlayer: isPlayer,
+            sourceType: sourceType
+        };
+        if (type === 'evil') {
+            proj.evilAnimTimer = 0;
+            proj.evilAnimFrame = 0;
+        }
+        this.projectiles.push(proj);
     }
 
-    public playerHit(damage: number, srcPos: THREE.Vector3) {
+    public playerHit(damage: number, srcPos: THREE.Vector3, sourceType?: string) {
         const event = new CustomEvent('playerDamaged', {
-            detail: { damage, srcPos }
+            detail: { damage, srcPos, sourceType }
         });
         window.dispatchEvent(event);
+    }
+
+    /** Damage all non-person entities within radiusWorld units of center. Used by fire bombs. */
+    public damageInRadius(center: THREE.Vector3, radiusWorld: number, damage: number): void {
+        for (let i = this.activeEntities.length - 1; i >= 0; i--) {
+            const entity = this.activeEntities[i];
+            if (entity.data.type === 'person' || entity.data.type === 'chest_temple') continue;
+            const dist = entity.sprite.position.distanceTo(center);
+            if (dist <= radiusWorld) {
+                const knockDir = new THREE.Vector3().subVectors(entity.sprite.position, center).normalize();
+                knockDir.y = 0;
+                this.damageEntity(i, damage, knockDir);
+            }
+        }
     }
 
     public checkAttack(attackBox: THREE.Box3, damage: number = 1) {
@@ -327,12 +430,15 @@ export class EntityManager {
         if (typeof entity.data.properties.hp !== 'number') entity.data.properties.hp = 10;
 
         entity.data.properties.hp -= damage;
+        this.onEntityHit?.(entity.data.type);
 
         entity.sprite.material.color.setHex(0xff0000);
         setTimeout(() => {
             if (entity.sprite) entity.sprite.material.color.setHex(0xffffff);
         }, 100);
 
+        knockDir.y = 0;
+        if (knockDir.lengthSq() > 0) knockDir.normalize();
         const shove = knockDir.clone().multiplyScalar(1.5);
 
         // Simple collision check for shove
@@ -354,11 +460,20 @@ export class EntityManager {
         console.log(`Hit ${entity.data.type}! HP: ${entity.data.properties.hp}`);
 
         if (entity.data.properties.hp <= 0) {
-            this.scene.remove(entity.sprite);
-            this.activeEntities.splice(index, 1);
-
-            const event = new CustomEvent('entityKilled', { detail: entity.data });
-            window.dispatchEvent(event);
+            if (entity.data.type === 'demon') {
+                // Demon dies via death animation pass, not instant removal
+                if (!entity.data.properties.isDying) {
+                    entity.data.properties.isDying = true;
+                    entity.data.properties.deathFrame = 0;
+                    entity.data.properties.deathTimer = 0;
+                    this.onDemonDying?.(); // fire immediately so sound plays at animation start
+                }
+            } else {
+                this.scene.remove(entity.sprite);
+                this.activeEntities.splice(index, 1);
+                const event = new CustomEvent('entityKilled', { detail: entity.data });
+                window.dispatchEvent(event);
+            }
         }
     }
 
@@ -379,7 +494,7 @@ export class EntityManager {
         return true;
     }
 
-    public update(playerCamera: THREE.Camera, walls: boolean[][], delta: number) {
+    public update(playerCamera: THREE.Camera, walls: boolean[][], delta: number, agility: number = 1) {
         this.currentWalls = walls;
         const playerPos = playerCamera.position;
         const now = Date.now();
@@ -389,19 +504,46 @@ export class EntityManager {
             const f = this.follower;
             const fPos = f.sprite.position;
 
-            // Distance to player
             const dx = playerPos.x - fPos.x;
             const dz = playerPos.z - fPos.z;
             const dist = Math.sqrt(dx * dx + dz * dz);
 
-            // Follow if too far (> 3 units)
             if (dist > 3) {
-                const moveSpeed = 4.0 * delta;
+                // Match player terminal velocity: (baseAcc + scalingAcc * agility) / friction
+                const terminalVelocity = (150.0 + 50.0 * Math.min(agility, 5)) / 10;
+                const moveSpeed = terminalVelocity * delta;
                 const dirX = dx / dist;
                 const dirZ = dz / dist;
-
                 fPos.x += dirX * moveSpeed;
                 fPos.z += dirZ * moveSpeed;
+
+                f.anim.isMoving = true;
+
+                // Direction relative to camera
+                const toCamera = new THREE.Vector3().subVectors(playerPos, fPos).normalize();
+                const moveDir = new THREE.Vector3(dirX, 0, dirZ);
+                const dot = moveDir.dot(toCamera);
+                if (dot > 0.5) {
+                    f.anim.direction = 'down';
+                } else if (dot < -0.5) {
+                    f.anim.direction = 'up';
+                } else {
+                    f.anim.direction = 'side';
+                    (f.anim as any).facingLeft = dirX < 0;
+                }
+
+                // Walk frame cycle (same 180ms clock as entities, offset by position for desync)
+                const offset = ((f.data.x ?? 0) + (f.data.y ?? 0)) * 100;
+                f.anim.frame = Math.floor((now + offset) / 180) % 4;
+            } else {
+                f.anim.isMoving = false;
+                f.anim.frame = 0;
+            }
+
+            // Apply animated sprite texture
+            const followerSpriteId: string = (f.data as any).sprite ?? f.data.properties?.sprite;
+            if (followerSpriteId) {
+                this.applyPersonSprite(f, followerSpriteId);
             }
         }
 
@@ -410,6 +552,20 @@ export class EntityManager {
             const p = this.projectiles[i];
             p.life -= delta;
             p.sprite.position.add(p.dir.clone().multiplyScalar(p.speed * delta));
+
+            // Animate evil projectile frames
+            if (p.evilAnimFrame !== undefined) {
+                p.evilAnimTimer += delta;
+                if (p.evilAnimTimer > 0.08) {
+                    p.evilAnimTimer = 0;
+                    p.evilAnimFrame = (p.evilAnimFrame + 1) % 7;
+                    const eMat = (p.sprite as THREE.Sprite).material as THREE.SpriteMaterial;
+                    if (eMat) {
+                        eMat.map = this.assetManager.getTexture(`projectile_evil_${p.evilAnimFrame}`) || eMat.map;
+                        eMat.needsUpdate = true;
+                    }
+                }
+            }
 
             // Collision with walls
             const gx = Math.floor(p.sprite.position.x / 2);
@@ -422,7 +578,10 @@ export class EntityManager {
                 // Collision with Enemies
                 for (let eIdx = this.activeEntities.length - 1; eIdx >= 0; eIdx--) {
                     const checkEnt = this.activeEntities[eIdx];
-                    if (checkEnt.data.type !== 'person' && checkEnt.data.type !== 'chest' && p.sprite.position.distanceTo(checkEnt.sprite.position) < 1.0) {
+                    const _hitDx = p.sprite.position.x - checkEnt.sprite.position.x;
+                    const _hitDy = p.sprite.position.y - checkEnt.sprite.position.y;
+                    const _hitDz = p.sprite.position.z - checkEnt.sprite.position.z;
+                    if (checkEnt.data.type !== 'person' && checkEnt.data.type !== 'chest' && Math.sqrt(_hitDx * _hitDx + _hitDy * _hitDy + _hitDz * _hitDz) < 1.5) {
                         // Assuming damage is stored somewhere accessible, or injected later. 
                         // For now base projectile damage off rangeMod is not needed, we pass it via main.ts. 
                         // But since we lost direct strength linkage here, let's assume 1 or pass it in.
@@ -436,7 +595,7 @@ export class EntityManager {
             } else {
                 // Collision with Player
                 if (p.sprite.position.distanceTo(playerPos) < 1.0) {
-                    this.playerHit(2, p.sprite.position);
+                    this.playerHit(2, p.sprite.position, p.sourceType);
                     p.life = -1; // Kill projectile
                 }
             }
@@ -447,7 +606,27 @@ export class EntityManager {
             }
         }
 
+        // Death animation pass — must run before main AI loop
+        for (let di = this.activeEntities.length - 1; di >= 0; di--) {
+            const dying = this.activeEntities[di];
+            if (!dying.data.properties.isDying) continue;
+            dying.data.properties.deathTimer += delta;
+            if (dying.data.properties.deathTimer > 0.12) {
+                dying.data.properties.deathTimer = 0;
+                dying.data.properties.deathFrame = (dying.data.properties.deathFrame || 0) + 1;
+                if (dying.data.properties.deathFrame >= 7) {
+                    this.scene.remove(dying.sprite);
+                    this.activeEntities.splice(di, 1);
+                    window.dispatchEvent(new CustomEvent('entityKilled', { detail: dying.data }));
+                } else {
+                    const tex = this.assetManager.getTexture(`enemy_demon_death_${dying.data.properties.deathFrame}`);
+                    if (tex) { dying.sprite.material.map = tex; dying.sprite.material.needsUpdate = true; }
+                }
+            }
+        }
+
         this.activeEntities.forEach(entity => {
+            if (entity.data.properties.isDying) return; // handled by death animation pass
             const startPos = entity.sprite.position.clone();
             entity.anim.isMoving = false;
             const enemyTemplate = this.gameConfig?.enemies?.find((e: any) => e.id === entity.data.type);
@@ -457,8 +636,9 @@ export class EntityManager {
             let ignoreWalls = false;
 
             // Attack Player (Contact Damage)
-            if (entity.data.type !== 'person' && entity.data.type !== 'chest' && dist < 1.5) {
-                this.playerHit(1, entity.sprite.position);
+            if (entity.data.type !== 'person' && entity.data.type !== 'chest' && entity.data.type !== 'chest_temple' && dist < 1.5) {
+                const contactDamage = (enemyTemplate as any)?.damage || 1;
+                this.playerHit(contactDamage, entity.sprite.position, entity.data.type);
             }
 
             // Initialize Properties
@@ -533,7 +713,8 @@ export class EntityManager {
                         entity.data.properties.shootTimer += delta;
                         if (entity.data.properties.shootTimer > 2.0) {
                             const shootDir = new THREE.Vector3().subVectors(playerPos, entity.sprite.position).normalize();
-                            this.spawnProjectile(entity.sprite.position.x, entity.sprite.position.z, shootDir, 'arrow');
+                            this.spawnProjectile(entity.sprite.position.x, entity.sprite.position.z, shootDir, 'arrow', false, 1, undefined, entity.data.type);
+                            this.onEntityShoot?.('arrow');
                             entity.data.properties.shootTimer = 0;
                             dir.set(0, 0, 0);
                         }
@@ -587,6 +768,7 @@ export class EntityManager {
                             const inBounds = gx >= 0 && gx < walls.length && gy >= 0 && gy < walls[0].length;
                             if (inBounds && !walls[gx][gy]) {
                                 entity.sprite.position.set(tx, 1, tz);
+                                this.onEntityTeleport?.();
                             }
                         }
                         dir.subVectors(entity.sprite.position, playerPos).normalize();
@@ -596,11 +778,255 @@ export class EntityManager {
                         entity.data.properties.shootTimer += delta;
                         if (entity.data.properties.shootTimer > 3.0) {
                             const shootDir = new THREE.Vector3().subVectors(playerPos, entity.sprite.position).normalize();
-                            this.spawnProjectile(entity.sprite.position.x, entity.sprite.position.z, shootDir, 'fireball');
+                            this.spawnProjectile(entity.sprite.position.x, entity.sprite.position.z, shootDir, 'fireball', false, 1, undefined, entity.data.type);
+                            this.onEntityShoot?.('fireball');
                             entity.data.properties.shootTimer = 0;
                             dir.set(0, 0, 0);
                         }
                     }
+                    break;
+
+                case 'demon': {
+                    const props = entity.data.properties;
+                    if (props.attackTimer === undefined) props.attackTimer = 0;
+                    if (props.backTimer === undefined) props.backTimer = 0;
+                    if (props.flyY === undefined) props.flyY = 0;
+                    // Escape flight: fly high and ignore walls until timer expires
+                    if ((props.escapeTimer ?? 0) > 0) {
+                        props.escapeTimer -= delta;
+                        props.flyTarget = 8;
+                        ignoreWalls = true;
+                    }
+                    if (props.flyTarget === undefined) props.flyTarget = 0;
+                    if (props.phase2Done === undefined) props.phase2Done = false;
+                    if (props.isCharging === undefined) props.isCharging = false;
+                    if (!props.chargeDir) props.chargeDir = { x: 0, z: 0 };
+
+                    const dHp = props.hp;
+                    props.attackTimer += delta;
+
+                    const maxHp = props.maxHp ?? 30;
+                    const phase3Threshold = Math.floor(maxHp / 3);
+                    const phase2Threshold = Math.floor(maxHp * 2 / 3);
+
+                    if (dHp <= phase3Threshold) {
+                        // Phase 3: charge at close range (faster), fly + 3-spread when far
+                        if (dist < 10) {
+                            props.flyTarget = Math.max(0, playerPos.y - 2.5);
+                            if (!props.isCharging && props.backTimer <= 0) {
+                                const cd = new THREE.Vector3().subVectors(playerPos, entity.sprite.position).normalize();
+                                props.chargeDir = { x: cd.x, z: cd.z };
+                                props.isCharging = true;
+                            }
+                            if (props.backTimer > 0) {
+                                props.backTimer = Math.max(0, props.backTimer - delta);
+                                dir.set(-props.chargeDir.x, 0, -props.chargeDir.z);
+                                speed = 1.0;
+                            } else if (props.isCharging) {
+                                dir.set(props.chargeDir.x, 0, props.chargeDir.z);
+                                speed = 10.0;
+                            }
+                        } else {
+                            props.flyTarget = 4;
+                            props.isCharging = false;
+                            if (props.attackTimer > 1.5) {
+                                const baseDir = new THREE.Vector3().subVectors(playerPos, entity.sprite.position).normalize();
+                                [-15 * Math.PI / 180, 0, 15 * Math.PI / 180].forEach(angle => {
+                                    const rotated = baseDir.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), angle);
+                                    this.spawnProjectile(entity.sprite.position.x, entity.sprite.position.z, rotated, 'evil', false, 1, entity.sprite.position.y, entity.data.type);
+                                });
+                                this.onEntityShoot?.('evil');
+                                props.attackTimer = 0;
+                            }
+                            // Slowly pursue while flying
+                            {
+                                const flySpeed = 2;
+                                const fdx = playerPos.x - entity.sprite.position.x;
+                                const fdz = playerPos.z - entity.sprite.position.z;
+                                const fdLen = Math.sqrt(fdx * fdx + fdz * fdz);
+                                if (fdLen > 0.1) {
+                                    const tryX = entity.sprite.position.x + (fdx / fdLen) * flySpeed * delta;
+                                    const tryZ = entity.sprite.position.z + (fdz / fdLen) * flySpeed * delta;
+                                    const fgx = Math.floor(tryX / this.tileSize);
+                                    const fgz = Math.floor(tryZ / this.tileSize);
+                                    if (!walls[fgx]?.[fgz]) {
+                                        entity.sprite.position.x = tryX;
+                                        entity.sprite.position.z = tryZ;
+                                    }
+                                }
+                            }
+                        }
+                    } else if (dHp <= phase2Threshold && !props.phase2Done) {
+                        // Phase 2: move to arena centre and summon minions
+                        const dcx = this.arenaCenter.x - entity.sprite.position.x;
+                        const dcz = this.arenaCenter.z - entity.sprite.position.z;
+                        const dcc = Math.sqrt(dcx * dcx + dcz * dcz);
+                        if (dcc > 1.5) {
+                            dir.set(dcx / dcc, 0, dcz / dcc);
+                            speed = 4.0;
+                        } else {
+                            props.phase2Done = true;
+                            this.onDemonPhase2?.();
+                        }
+                    } else {
+                        // Phase 1 (or post-Phase-2 with hp 10-20): charge or ranged
+                        if (dist < 10) {
+                            props.flyTarget = Math.max(0, playerPos.y - 2.5);
+                            if (!props.isCharging && props.backTimer <= 0) {
+                                const cd = new THREE.Vector3().subVectors(playerPos, entity.sprite.position).normalize();
+                                props.chargeDir = { x: cd.x, z: cd.z };
+                                props.isCharging = true;
+                            }
+                            if (props.backTimer > 0) {
+                                props.backTimer = Math.max(0, props.backTimer - delta);
+                                dir.set(-props.chargeDir.x, 0, -props.chargeDir.z);
+                                speed = 1.0;
+                            } else if (props.isCharging) {
+                                dir.set(props.chargeDir.x, 0, props.chargeDir.z);
+                                speed = 10.0;
+                            }
+                        } else {
+                            // Ranged: fly up, shoot, and slowly pursue
+                            props.flyTarget = 6;
+                            props.isCharging = false;
+                            if (props.attackTimer > 2.0) {
+                                const shootDir = new THREE.Vector3().subVectors(playerPos, entity.sprite.position).normalize();
+                                this.spawnProjectile(entity.sprite.position.x, entity.sprite.position.z, shootDir, 'evil', false, 1, entity.sprite.position.y, entity.data.type);
+                                this.onEntityShoot?.('evil');
+                                props.attackTimer = 0;
+                            }
+                            // Slowly pursue player while flying
+                            {
+                                const flySpeed = 2;
+                                const fdx = playerPos.x - entity.sprite.position.x;
+                                const fdz = playerPos.z - entity.sprite.position.z;
+                                const fdLen = Math.sqrt(fdx * fdx + fdz * fdz);
+                                if (fdLen > 0.1) {
+                                    const tryX = entity.sprite.position.x + (fdx / fdLen) * flySpeed * delta;
+                                    const tryZ = entity.sprite.position.z + (fdz / fdLen) * flySpeed * delta;
+                                    const fgx = Math.floor(tryX / this.tileSize);
+                                    const fgz = Math.floor(tryZ / this.tileSize);
+                                    if (!walls[fgx]?.[fgz]) {
+                                        entity.sprite.position.x = tryX;
+                                        entity.sprite.position.z = tryZ;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Smooth fly Y interpolation
+                    props.flyY += (props.flyTarget - props.flyY) * Math.min(delta * 6, 1);
+                    entity.sprite.position.y = 2.5 + props.flyY;
+                    break;
+                }
+
+                case 'bee': {
+                    const props = entity.data.properties;
+                    if (props.flyY === undefined) props.flyY = 0;
+                    if (props.flyTarget === undefined) props.flyTarget = 3;
+                    if (props.backTimer === undefined) props.backTimer = 0;
+                    if (!props.chargeDir) props.chargeDir = { x: 0, z: 0 };
+
+                    if (dist < 8) {
+                        props.flyTarget = Math.max(0, playerPos.y - 2.5); // Match player height to attack
+                        // Charge — same mechanic as demon phase 1
+                        if (!props.isCharging && props.backTimer <= 0) {
+                            const cd = new THREE.Vector3().subVectors(playerPos, entity.sprite.position).normalize();
+                            props.chargeDir = { x: cd.x, z: cd.z };
+                            props.isCharging = true;
+                        }
+                        if (props.backTimer > 0) {
+                            props.backTimer = Math.max(0, props.backTimer - delta);
+                            dir.set(-props.chargeDir.x, 0, -props.chargeDir.z);
+                            speed = 1.0;
+                        } else if (props.isCharging) {
+                            dir.set(props.chargeDir.x, 0, props.chargeDir.z);
+                            speed = 16.0;
+                        }
+                    } else {
+                        props.flyTarget = 3; // Rise back up while pursuing
+                        props.isCharging = false;
+                        dir.subVectors(playerPos, entity.sprite.position).normalize();
+                        speed = 2.0;
+                    }
+
+                    // Smooth fly Y interpolation (same as demon)
+                    props.flyY += (props.flyTarget - props.flyY) * Math.min(delta * 6, 1);
+                    entity.sprite.position.y = 2.5 + props.flyY;
+                    break;
+                }
+
+                case 'man_eater_flower': {
+                    const props = entity.data.properties;
+                    if (!props.isCharging) {
+                        speed = 0;
+                        // Trigger charge when player is within 5 tiles (10 world units)
+                        if (dist < 10) {
+                            props.chargeDir = new THREE.Vector3().subVectors(playerPos, entity.sprite.position).normalize();
+                            props.isCharging = true;
+                        }
+                    }
+                    if (props.isCharging) {
+                        dir.copy(props.chargeDir);
+                        speed = 8.0;
+                    }
+                    break;
+                }
+
+                case 'arachne': {
+                    const props = entity.data.properties;
+                    if (!props.isCharging) {
+                        // Wander until player is within 5 tiles (10 world units)
+                        if (dist < 10) {
+                            props.chargeDir = new THREE.Vector3().subVectors(playerPos, entity.sprite.position).normalize();
+                            props.isCharging = true;
+                        } else {
+                            if (Math.random() < 0.02) {
+                                props.wanderingDir = new THREE.Vector3(Math.random() - 0.5, 0, Math.random() - 0.5).normalize();
+                            }
+                            if (props.wanderingDir) dir.copy(props.wanderingDir);
+                        }
+                    }
+                    if (props.isCharging) {
+                        dir.copy(props.chargeDir);
+                        speed = 14.0;
+                    }
+                    break;
+                }
+
+                case 'eyeball': {
+                    const props = entity.data.properties;
+                    // Wander randomly
+                    if (Math.random() < 0.02) {
+                        props.wanderingDir = new THREE.Vector3(Math.random() - 0.5, 0, Math.random() - 0.5).normalize();
+                    }
+                    if (props.wanderingDir) dir.copy(props.wanderingDir);
+                    // Shoot laser within 10 tiles (20 world units)
+                    if (dist < 20) {
+                        if (!props.shootTimer) props.shootTimer = 0;
+                        props.shootTimer += delta;
+                        if (props.shootTimer > 3.0) {
+                            const shootDir = new THREE.Vector3().subVectors(playerPos, entity.sprite.position).normalize();
+                            this.spawnProjectile(entity.sprite.position.x, entity.sprite.position.z, shootDir, 'eye_lazer', false, 1, undefined, entity.data.type);
+                            this.onEntityShoot?.('eye_lazer');
+                            props.shootTimer = 0;
+                            dir.set(0, 0, 0);
+                        }
+                    }
+                    break;
+                }
+
+                case 'fire_skull':
+                    // Always moving in a fixed direction; wall bounce handled below
+                    if (!entity.data.properties.currentDir) {
+                        const dirs = [
+                            new THREE.Vector3(1, 0, 0), new THREE.Vector3(-1, 0, 0),
+                            new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0, -1)
+                        ];
+                        entity.data.properties.currentDir = dirs[Math.floor(Math.random() * dirs.length)];
+                    }
+                    dir.copy(entity.data.properties.currentDir);
                     break;
 
                 default:
@@ -613,7 +1039,7 @@ export class EntityManager {
                 dir.y = 0;
                 const tryMove = (vec: THREE.Vector3): boolean => {
                     const testPos = entity.sprite.position.clone().add(vec);
-                    const radius = 0.5;
+                    const radius = entity.data.type === 'demon' ? 1.5 : 0.5;
                     const checkPoints = [
                         testPos,
                         new THREE.Vector3(testPos.x + radius, 0, testPos.z),
@@ -635,7 +1061,7 @@ export class EntityManager {
 
                 const fullMove = dir.clone().multiplyScalar(speed * delta);
                 let attemptMove = true;
-                if (entity.data.type === 'snake') {
+                if (entity.data.type === 'snake' || entity.data.type === 'fire_skull') {
                     if (!tryMove(fullMove)) {
                         entity.data.properties.currentDir = null;
                         attemptMove = false;
@@ -661,6 +1087,42 @@ export class EntityManager {
             // Calculate ACTUAL movement
             const actualMove = new THREE.Vector3().subVectors(entity.sprite.position, startPos);
             const moveLen = actualMove.lengthSq();
+
+            // Reset charge if man_eater_flower/arachne hit a wall (couldn't move)
+            if ((entity.data.type === 'man_eater_flower' || entity.data.type === 'arachne') &&
+                entity.data.properties.isCharging && moveLen < 0.00001) {
+                entity.data.properties.isCharging = false;
+                entity.data.properties.chargeDir = null;
+            }
+
+            // Stuck detection: if entity wanted to move but didn't, count frames; escape after ~1 second
+            if (dir.lengthSq() > 0 && moveLen < 0.00001) {
+                entity.data.properties.stuckFrames = (entity.data.properties.stuckFrames || 0) + 1;
+                if (entity.data.properties.stuckFrames >= 60) {
+                    entity.data.properties.stuckFrames = 0;
+                    if (entity.data.type === 'demon') {
+                        // Demon escapes by flying up and ignoring walls for 2 seconds
+                        entity.data.properties.escapeTimer = 2.0;
+                    } else {
+                        // Other enemies snap to nearest clear tile
+                        const gx = Math.floor(entity.sprite.position.x / 2);
+                        const gy = Math.floor(entity.sprite.position.z / 2);
+                        outer: for (let r = 1; r <= 5; r++) {
+                            for (let dx = -r; dx <= r; dx++) {
+                                for (const dz of [r - Math.abs(dx), -(r - Math.abs(dx))]) {
+                                    const nx = gx + dx, nz = gy + dz;
+                                    if (nx >= 0 && nx < walls.length && nz >= 0 && nz < walls[0].length && !walls[nx][nz]) {
+                                        entity.sprite.position.set(nx * 2 + 1, entity.sprite.position.y, nz * 2 + 1);
+                                        break outer;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                entity.data.properties.stuckFrames = 0;
+            }
 
             if (moveLen > 0.000001) {
                 entity.anim.isMoving = true;
@@ -719,38 +1181,45 @@ export class EntityManager {
                 }
             }
 
+            // Demon/Bee: detect charge wall/player collision and start back-up
+            if ((entity.data.type === 'demon' || entity.data.type === 'bee') && entity.data.properties.isCharging) {
+                if (entity.sprite.position.distanceTo(startPos) < 0.02 || dist < 1.5) {
+                    entity.data.properties.isCharging = false;
+                    entity.data.properties.backTimer = 0.4;
+                }
+            }
+
             // Person Skin Logic
             if (entity.data.type === 'person' && entity.data.properties.sprite) {
-                let row = 0;
-                let skin = 0;
-                const match = entity.data.properties.sprite.match(/character_(\d+)_(\d+)/);
-                if (match) {
-                    row = parseInt(match[1]);
-                    skin = parseInt(match[2]);
-                } else {
-                    const matchOld = entity.data.properties.sprite.match(/character_(\d+)/);
-                    if (matchOld) skin = parseInt(matchOld[1]);
-                }
-
-                const baseCol = skin * 3;
-                let offset = 2; // Down
-                if (entity.anim.direction === 'up') offset = 0;
-                else if (entity.anim.direction === 'side') offset = 1;
-
-                if (entity.anim.direction === 'side') {
-                    if ((entity.anim as any).facingLeft) {
-                        entity.sprite.scale.x = -Math.abs(entity.sprite.scale.x);
-                    } else {
-                        entity.sprite.scale.x = Math.abs(entity.sprite.scale.x);
-                    }
-                }
-
-                const finalCol = baseCol + offset;
-                const key = `character_${row}_${finalCol}`;
-                const newTex = this.assetManager.getTexture(key);
-                if (newTex) entity.sprite.material.map = newTex;
+                this.applyPersonSprite(entity, entity.data.properties.sprite);
             }
         });
+    }
+
+    private applyPersonSprite(state: EntityState, spriteId: string) {
+        const match = spriteId.match(/character_(\d+)_(\d+)/);
+        if (!match) return;
+        const baseRow = parseInt(match[1]);
+        const skin = parseInt(match[2]);
+
+        const baseCol = skin * 3;
+        let dirOffset = 2; // down
+        if (state.anim.direction === 'up') dirOffset = 0;
+        else if (state.anim.direction === 'side') dirOffset = 1;
+
+        // Horizontal flip for side direction; reset for up/down to avoid stale flip
+        if (state.anim.direction === 'side') {
+            state.sprite.scale.x = (state.anim as any).facingLeft
+                ? -Math.abs(state.sprite.scale.x)
+                : Math.abs(state.sprite.scale.x);
+        } else {
+            state.sprite.scale.x = Math.abs(state.sprite.scale.x);
+        }
+
+        const walkFrame = state.anim.isMoving ? state.anim.frame : 0;
+        const key = `character_${baseRow + walkFrame}_${baseCol + dirOffset}`;
+        const newTex = this.assetManager.getTexture(key);
+        if (newTex) state.sprite.material.map = newTex;
     }
 
     public getEntityByPersonId(personId: string): any | null {

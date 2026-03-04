@@ -101,40 +101,38 @@ export class Controls {
             const speedX = -this.velocity.x * delta;
             const speedZ = -this.velocity.z * delta;
 
-            // Collision Detection
-            // Predict next position
-            const currentPos = this.camera.position.clone();
-
-            // Move Right/Left (X axis relative to camera view)
-            const right = new THREE.Vector3();
+            // Build camera-local right and forward vectors in world space
             const matrix = new THREE.Matrix4();
             matrix.extractRotation(this.camera.matrix);
+            const right = new THREE.Vector3();
             right.setFromMatrixColumn(matrix, 0);
-
-            // Move Forward/Back (Z axis relative to camera view)
             const forward = new THREE.Vector3();
             forward.setFromMatrixColumn(matrix, 2);
-            forward.negate(); // Forward is -Z
+            forward.negate(); // column 2 is back; negate for forward
 
-            // Let's test X and Z separately for sliding collision
+            // Decompose into world-space X and Z so we can slide along walls.
+            // Camera-local axes are diagonal in world space when the camera is rotated,
+            // so testing camera-space axes independently blocks movement even when only
+            // one world axis is obstructed.
+            const worldDX = right.x * speedX + forward.x * speedZ;
+            const worldDZ = right.z * speedX + forward.z * speedZ;
 
-            // Test X movement
-            const nextPosX = currentPos.clone().add(right.clone().multiplyScalar(speedX));
+            const pos = this.camera.position;
+
+            const nextPosX = pos.clone(); nextPosX.x += worldDX;
+            const nextPosZ = pos.clone(); nextPosZ.z += worldDZ;
+
             if (!this.checkCollision(nextPosX)) {
-                this.controls.moveRight(speedX);
+                pos.x += worldDX;
             } else {
                 this.velocity.x = 0;
+                this.velocity.z = 0;
             }
 
-            // Test Z movement
-            // Note: after moveRight, camera position might have changed.
-            // We should use the NEW position for the next check or verify independently.
-            // Standard is independent axis check, so we use the camera's current position again.
-            const nextPosZ = this.camera.position.clone().add(forward.clone().multiplyScalar(speedZ));
-
             if (!this.checkCollision(nextPosZ)) {
-                this.controls.moveForward(speedZ);
+                pos.z += worldDZ;
             } else {
+                this.velocity.x = 0;
                 this.velocity.z = 0;
             }
         }
@@ -183,6 +181,10 @@ export class Controls {
     }
 
 
+
+    public setSensitivity(value: number) {
+        this.controls.pointerSpeed = value;
+    }
 
     public lock() {
         this.controls.lock();

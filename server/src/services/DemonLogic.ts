@@ -7,7 +7,8 @@ export class DemonLogic {
         // 1. Select Demon
         const demon = people[Math.floor(Math.random() * people.length)];
         demon.isDemon = true;
-        console.log(`Demon Selected: ${demon.name} (${demon.id}) in ${demon.attributes.townId}`);
+        const demonTown = towns.find(t => t.id === demon.attributes.townId);
+        console.log(`Demon Selected: ${demon.name} (${demon.id}) in ${demonTown?.name}`);
 
         // Select Minions
         const minionCount = towns.length * (gameConfig.world.minionsPerTown || 1);
@@ -15,7 +16,8 @@ export class DemonLogic {
         DemonLogic.shuffle(candidates);
         for (let i = 0; i < Math.min(minionCount, candidates.length); i++) {
             candidates[i].isMinion = true;
-            console.log(`Minion Selected: ${candidates[i].name} (${candidates[i].id}) in ${candidates[i].attributes.townId}`);
+            const minionTown = towns.find(t => t.id === candidates[i].attributes.townId);
+            console.log(`Minion Selected: ${candidates[i].name} (${candidates[i].id}) in ${minionTown?.name}`);
         }
 
         // 2. Generate Items (Unique per world)
@@ -196,14 +198,15 @@ export class DemonLogic {
     private static generateTasks(people: Person[], items: Item[], towns: Town[]) {
         const taskPool: GameTask[] = [];
 
-        // 1. Kill Tasks (1 per monster type)
+        // 1. Kill Tasks (1 per overworld monster type — temple-only enemies excluded)
         gameConfig.enemies.forEach(m => {
+            if ((m as any).templeOnly) return;
             taskPool.push({
                 id: `task_kill_${m.id}`,
                 type: TaskType.KILL,
                 targetId: m.id,
                 targetName: m.name.toUpperCase(),
-                amount: m.toKill,
+                amount: m.toKill ?? 0,
                 currentAmount: 0,
                 description: `Kill ${m.toKill} ${m.name}s`,
                 reward: 'CLUE',
@@ -265,20 +268,20 @@ export class DemonLogic {
         });
 
         // Find Item (1 per Item)
-        items.forEach(item => {
-            taskPool.push({
-                id: `task_find_item_${item.id}`,
-                type: TaskType.FIND_ITEM,
-                targetId: item.id,
-                targetName: item.name,
-                amount: 1,
-                currentAmount: 0,
-                description: `Find someone with ${item.name}`,
-                reward: 'CLUE',
-                giverId: '',
-                isCompleted: false
-            });
-        });
+        // items.forEach(item => {
+        //     taskPool.push({
+        //         id: `task_find_item_${item.id}`,
+        //         type: TaskType.FIND_ITEM,
+        //         targetId: item.id,
+        //         targetName: item.name,
+        //         amount: 1,
+        //         currentAmount: 0,
+        //         description: `Find someone with ${item.name}`,
+        //         reward: 'CLUE',
+        //         giverId: '',
+        //         isCompleted: false
+        //     });
+        // });
 
         // Escort Tasks (1 per Town)
         towns.forEach(town => {
@@ -309,12 +312,37 @@ export class DemonLogic {
             }
         });
 
-        // 3. Assign kill tasks to good-clue holders, then distribute the rest
+        // Magic Item Tasks (one per temple — completed by finding the item in the temple)
+        const MAGIC_ITEMS = [
+            { templeType: 'sky',   name: 'Amulet of Flight' },
+            { templeType: 'earth', name: 'Aura of Protection' },
+            { templeType: 'space', name: 'Cape of Teleportation' },
+            { templeType: 'light', name: 'Eye of Truth' },
+            { templeType: 'fire',  name: 'Fire Bomb' },
+        ];
+        MAGIC_ITEMS.forEach(item => {
+            taskPool.push({
+                id: `task_find_magic_${item.templeType}`,
+                type: TaskType.FIND_ITEM,
+                targetId: item.templeType,
+                targetName: item.name,
+                amount: 1,
+                currentAmount: 0,
+                description: `Find the ${item.name}`,
+                reward: 'CLUE',
+                giverId: '',
+                isCompleted: false
+            });
+        });
+
+        // 3. Assign tasks: one good-clue holder gets a magic item task; rest get kill tasks
         const killTasks = taskPool.filter(t => t.type === TaskType.KILL);
         const escortTasks = taskPool.filter(t => t.type === TaskType.ESCORT);
-        const otherTasks = taskPool.filter(t => t.type !== TaskType.KILL && t.type !== TaskType.ESCORT);
+        const magicItemTasks = taskPool.filter(t => t.type === TaskType.FIND_ITEM);
+        const otherTasks = taskPool.filter(t => t.type !== TaskType.KILL && t.type !== TaskType.ESCORT && t.type !== TaskType.FIND_ITEM);
         this.shuffle(killTasks);
         this.shuffle(escortTasks);
+        this.shuffle(magicItemTasks);
         this.shuffle(otherTasks);
 
         const goodClueHolders = people.filter(p => p.clues?.good);
@@ -347,18 +375,27 @@ export class DemonLogic {
             }
         }
 
-        // Second pass: give every good-clue holder a kill task
+        // Second pass: give exactly one good-clue holder a magic item task; rest get kill tasks
+        let magicTaskGiven = false;
         for (const p of goodClueHolders) {
             if (assigned.has(p.id)) continue; // Merchant already assigned
-            if (killTasks.length === 0) break;
-            p.task = killTasks.shift()!;
-            p.task.giverId = p.id;
-            p.task.reward = 'CLUE';
-            assigned.add(p.id);
+            if (!magicTaskGiven && magicItemTasks.length > 0) {
+                p.task = magicItemTasks.shift()!;
+                p.task.giverId = p.id;
+                p.task.reward = 'CLUE';
+                assigned.add(p.id);
+                magicTaskGiven = true;
+            } else {
+                if (killTasks.length === 0) break;
+                p.task = killTasks.shift()!;
+                p.task.giverId = p.id;
+                p.task.reward = 'CLUE';
+                assigned.add(p.id);
+            }
         }
 
-        // General pool: leftover kill tasks + remaining escort tasks + all non-kill/non-escort tasks
-        const generalPool = [...killTasks, ...escortTasks, ...otherTasks];
+        // General pool: leftover kill + escort + remaining magic item tasks + other tasks
+        const generalPool = [...killTasks, ...escortTasks, ...magicItemTasks, ...otherTasks];
         this.shuffle(generalPool);
 
         // Second pass: assign remaining tasks to everyone not yet assigned
@@ -371,7 +408,7 @@ export class DemonLogic {
                     type: TaskType.KILL,
                     targetId: fallbackEnemy.id,
                     targetName: fallbackEnemy.name.toUpperCase(),
-                    amount: fallbackEnemy.toKill,
+                    amount: fallbackEnemy.toKill ?? 0,
                     currentAmount: 0,
                     description: `Kill ${fallbackEnemy.toKill} ${fallbackEnemy.name}s`,
                     reward: 'ITEM',

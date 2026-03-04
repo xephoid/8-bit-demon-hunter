@@ -4,7 +4,8 @@ import { AssetManager } from './AssetManager';
 interface WorldData {
     width: number;
     height: number;
-    type: 'world' | 'city';
+    type: 'world' | 'city' | 'arena' | 'temple';
+    customId?: string;
     walls: boolean[][];
     entities: any[];
     doors: any[];
@@ -22,8 +23,12 @@ export class LevelBuilder {
     }
 
     public build(data: WorldData) {
-        if (data.type === 'city') {
+        if (data.type === 'arena') {
+            this.buildArena(data);
+        } else if (data.type === 'city') {
             this.buildCity(data);
+        } else if (data.type === 'temple') {
+            this.buildTemple(data);
         } else {
             this.buildWorld(data);
         }
@@ -208,16 +213,39 @@ export class LevelBuilder {
         }
 
         // Create Meshes
+        const houseWallKeys = new Set(['town_house_left', 'town_house_mid', 'town_house_right']);
         wallBatch.forEach((matrices, key) => {
             const texture = this.assetManager.getTexture(key);
-            if (texture) {
-                const mat = new THREE.MeshBasicMaterial({ map: texture });
-                const mesh = new THREE.InstancedMesh(topWallGeometry, mat, matrices.length);
-                matrices.forEach((m, i) => mesh.setMatrixAt(i, m));
-                mesh.instanceMatrix.needsUpdate = true;
-                this.scene.add(mesh);
-                this.meshes.push(mesh);
+            if (!texture) return;
+
+            let material: THREE.MeshBasicMaterial | THREE.MeshBasicMaterial[];
+
+            if (houseWallKeys.has(key)) {
+                // Front face (+Z, group 4): correct as-is
+                const frontMat = new THREE.MeshBasicMaterial({ map: texture });
+
+                // Back face (-Z, group 5): Three.js mirrors this face horizontally — flip it back
+                const backTex = texture.clone();
+                backTex.needsUpdate = true;
+                backTex.repeat.x = -1;
+                backTex.offset.x = 1;
+                const backMat = new THREE.MeshBasicMaterial({ map: backTex });
+
+                // Side faces (+X=0, -X=1): use the neutral mid texture so ends look like plain wall
+                const sideTex = this.assetManager.getTexture('town_house_mid') ?? texture;
+                const sideMat = new THREE.MeshBasicMaterial({ map: sideTex });
+
+                // BoxGeometry group order: [+X, -X, +Y, -Y, +Z(front), -Z(back)]
+                material = [sideMat, sideMat, frontMat, frontMat, frontMat, backMat];
+            } else {
+                material = new THREE.MeshBasicMaterial({ map: texture });
             }
+
+            const mesh = new THREE.InstancedMesh(topWallGeometry, material, matrices.length);
+            matrices.forEach((m, i) => mesh.setMatrixAt(i, m));
+            mesh.instanceMatrix.needsUpdate = true;
+            this.scene.add(mesh);
+            this.meshes.push(mesh);
         });
 
         // 3. Doors
@@ -233,6 +261,14 @@ export class LevelBuilder {
             // Determine Texture based on Type
             let texKey = 'door';
             if (door.type === 'exit') texKey = 'town_door_open';
+            else if (door.type === 'temple') texKey = 'temple_entrance';
+            else if (door.type === 'temple_exit') {
+                // Per-temple door texture: derive type from exit door id ("exit_temple_sky" → "sky")
+                const templeType = door.id?.replace('exit_temple_', '') ?? '';
+                texKey = this.assetManager.getTexture(`temple_${templeType}_exit_door`)
+                    ? `temple_${templeType}_exit_door`
+                    : 'temple_exit_door';
+            }
 
             const doorTexture = this.assetManager.getTexture(texKey);
             const doorMaterial = new THREE.SpriteMaterial({ map: doorTexture, transparent: true });
@@ -255,6 +291,138 @@ export class LevelBuilder {
                 this.scene.add(label);
             }
         });
+    }
+
+    private buildTemple(data: WorldData) {
+        // Derive the temple type (e.g. "sky" from "temple_sky") for per-temple texture keys.
+        // Key lookup order: temple_{type}_{slot}  →  temple_{slot}
+        const templeType = data.customId?.replace('temple_', '') ?? '';
+        const tex = (slot: string) =>
+            this.assetManager.getTexture(`temple_${templeType}_${slot}`) ??
+            this.assetManager.getTexture(`temple_${slot}`)!;
+
+        const floorGeometry = new THREE.PlaneGeometry(this.tileSize, this.tileSize);
+        floorGeometry.rotateX(-Math.PI / 2);
+
+        const floorMat = new THREE.MeshBasicMaterial({ map: tex('floor') });
+        const floorCount = data.width * data.height;
+        const floorMesh = new THREE.InstancedMesh(floorGeometry, floorMat, floorCount);
+
+        const dummy = new THREE.Object3D();
+        let fIdx = 0;
+        for (let x = 0; x < data.width; x++) {
+            for (let y = 0; y < data.height; y++) {
+                dummy.position.set((x * this.tileSize) + (this.tileSize / 2), 0, (y * this.tileSize) + (this.tileSize / 2));
+                dummy.updateMatrix();
+                floorMesh.setMatrixAt(fIdx++, dummy.matrix);
+            }
+        }
+        floorMesh.instanceMatrix.needsUpdate = true;
+        this.scene.add(floorMesh);
+        this.meshes.push(floorMesh);
+
+        // Use tileSize-height boxes (same as city) so the texture isn't stretched
+        const wallGeometry = new THREE.BoxGeometry(this.tileSize, this.tileSize, this.tileSize);
+        const wallMaterial = new THREE.MeshBasicMaterial({ map: tex('wall') });
+
+        const isTempleExitDoor = (x: number, y: number) =>
+            data.doors?.some((d: any) => d.type === 'temple_exit' && d.x === x && d.y === y);
+
+        let wallCount = 0;
+        for (let x = 0; x < data.width; x++)
+            for (let y = 0; y < data.height; y++)
+                if (data.walls[x][y] && !isTempleExitDoor(x, y)) wallCount++;
+
+        if (wallCount > 0) {
+            const bottomMesh = new THREE.InstancedMesh(wallGeometry, wallMaterial, wallCount);
+            const topMesh    = new THREE.InstancedMesh(wallGeometry, wallMaterial, wallCount);
+            let index = 0;
+            for (let x = 0; x < data.width; x++) {
+                for (let y = 0; y < data.height; y++) {
+                    if (data.walls[x][y] && !isTempleExitDoor(x, y)) {
+                        const wx = (x * this.tileSize) + (this.tileSize / 2);
+                        const wz = (y * this.tileSize) + (this.tileSize / 2);
+                        dummy.position.set(wx, this.tileSize / 2, wz);
+                        dummy.updateMatrix();
+                        bottomMesh.setMatrixAt(index, dummy.matrix);
+                        dummy.position.y += this.tileSize;
+                        dummy.updateMatrix();
+                        topMesh.setMatrixAt(index, dummy.matrix);
+                        index++;
+                    }
+                }
+            }
+            bottomMesh.instanceMatrix.needsUpdate = true;
+            topMesh.instanceMatrix.needsUpdate = true;
+            this.scene.add(bottomMesh);
+            this.scene.add(topMesh);
+            this.meshes.push(bottomMesh);
+            this.meshes.push(topMesh);
+        }
+
+        // Doors (exit back to overworld)
+        this.buildDoors(data.doors);
+    }
+
+    private buildArena(data: WorldData) {
+        const floorGeometry = new THREE.PlaneGeometry(this.tileSize, this.tileSize);
+        floorGeometry.rotateX(-Math.PI / 2);
+
+        // Dark floor
+        const floorMat = new THREE.MeshBasicMaterial({ color: 0x111111 });
+        const floorCount = data.width * data.height;
+        const floorMesh = new THREE.InstancedMesh(floorGeometry, floorMat, floorCount);
+
+        const dummy = new THREE.Object3D();
+        let fIdx = 0;
+        for (let x = 0; x < data.width; x++) {
+            for (let y = 0; y < data.height; y++) {
+                dummy.position.set((x * this.tileSize) + (this.tileSize / 2), 0, (y * this.tileSize) + (this.tileSize / 2));
+                dummy.updateMatrix();
+                floorMesh.setMatrixAt(fIdx++, dummy.matrix);
+            }
+        }
+        floorMesh.instanceMatrix.needsUpdate = true;
+        this.scene.add(floorMesh);
+        this.meshes.push(floorMesh);
+
+        // Separate border walls (textured) from interior pillars (red)
+        const pillarGeometry = new THREE.BoxGeometry(this.tileSize, this.tileSize * 2, this.tileSize);
+
+        const borderMatrices: THREE.Matrix4[] = [];
+        const innerMatrices: THREE.Matrix4[] = [];
+
+        for (let x = 0; x < data.width; x++) {
+            for (let y = 0; y < data.height; y++) {
+                if (data.walls[x][y]) {
+                    dummy.position.set((x * this.tileSize) + (this.tileSize / 2), this.tileSize, (y * this.tileSize) + (this.tileSize / 2));
+                    dummy.updateMatrix();
+                    const isBorder = x === 0 || x === data.width - 1 || y === 0 || y === data.height - 1;
+                    (isBorder ? borderMatrices : innerMatrices).push(dummy.matrix.clone());
+                }
+            }
+        }
+
+        if (borderMatrices.length > 0) {
+            const wallTex = this.assetManager.getTexture('arena_wall');
+            const borderMat = wallTex
+                ? new THREE.MeshBasicMaterial({ map: wallTex })
+                : new THREE.MeshBasicMaterial({ color: 0x443322 });
+            const borderMesh = new THREE.InstancedMesh(pillarGeometry, borderMat, borderMatrices.length);
+            borderMatrices.forEach((m, i) => borderMesh.setMatrixAt(i, m));
+            borderMesh.instanceMatrix.needsUpdate = true;
+            this.scene.add(borderMesh);
+            this.meshes.push(borderMesh);
+        }
+
+        if (innerMatrices.length > 0) {
+            const innerMat = new THREE.MeshBasicMaterial({ color: 0xcc2200 });
+            const innerMesh = new THREE.InstancedMesh(pillarGeometry, innerMat, innerMatrices.length);
+            innerMatrices.forEach((m, i) => innerMesh.setMatrixAt(i, m));
+            innerMesh.instanceMatrix.needsUpdate = true;
+            this.scene.add(innerMesh);
+            this.meshes.push(innerMesh);
+        }
     }
 
     public clear() {

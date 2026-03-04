@@ -30,6 +30,16 @@ canvas {
   font-family: sans-serif;
 }
 
+#xp-display {
+  position: absolute;
+  top: 82px;
+  left: 20px;
+  font-size: 14px;
+  color: white;
+  text-shadow: 2px 2px 0 #000;
+  font-family: 'Press Start 2P', monospace;
+}
+
 #task-hud {
   position: absolute;
   top: 20px;
@@ -52,18 +62,162 @@ canvas {
   width: 100%;
   height: 100%;
   background-color: rgba(0, 0, 0, 0.5);
-  /* Greyed out */
-  display: flex;
+  display: none;
+  flex-direction: column;
   justify-content: center;
   align-items: center;
   color: white;
   font-family: 'Press Start 2P', cursive;
-  font-size: 80px;
   pointer-events: all;
-  /* Blocks clicks */
-  z-index: 5; /* Lower than Dialogue (100) */
+  z-index: 5;
+}
+
+#pause-title {
+  font-size: 80px;
+  margin-bottom: 30px;
+}
+
+#pause-btn-resume {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 16px;
+  color: #FFD700;
+  background: transparent;
+  border: 3px solid #FFD700;
+  padding: 14px 40px;
+  cursor: pointer;
+  margin-bottom: 28px;
+}
+
+#pause-btn-resume:hover {
+  background: #443300;
+}
+
+#pause-nav {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 28px;
+}
+
+.pause-nav-btn {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 11px;
+  color: #aaa;
+  background: transparent;
+  border: 2px solid #555;
+  padding: 10px 20px;
+  cursor: pointer;
+}
+
+.pause-nav-btn:hover {
+  color: white;
+  border-color: #aaa;
+}
+
+.pause-nav-btn.active {
+  color: white;
+  border-color: #FFD700;
+}
+
+#pause-settings {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  font-size: 14px;
+}
+
+#pause-stats {
   display: none;
-  /* Hidden by default */
+  flex-direction: column;
+  align-items: center;
+  max-width: 400px;
+  width: 90%;
+}
+
+#pause-howto {
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  max-width: 640px;
+  width: 90%;
+}
+
+#sensitivity-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+#sensitivity-slider {
+  width: 200px;
+  cursor: pointer;
+}
+
+#sensitivity-value {
+  min-width: 30px;
+  text-align: left;
+}
+
+#volume-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+#volume-slider {
+  width: 200px;
+  cursor: pointer;
+}
+
+#volume-value {
+  min-width: 30px;
+  text-align: left;
+}
+
+#cheat-overlay {
+  position: absolute;
+  bottom: 60px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: none;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  background: rgba(0, 0, 0, 0.85);
+  border: 1px solid #00ff00;
+  padding: 10px 14px;
+  min-width: 420px;
+  z-index: 500;
+  pointer-events: all;
+  font-family: 'Press Start 2P', monospace;
+  font-size: 12px;
+}
+
+#cheat-overlay.open {
+  display: flex;
+}
+
+#cheat-prompt {
+  color: #00ff00;
+  white-space: nowrap;
+}
+
+#cheat-input {
+  background: transparent;
+  border: none;
+  outline: none;
+  color: #00ff00;
+  font-family: inherit;
+  font-size: inherit;
+  width: 100%;
+  caret-color: #00ff00;
+}
+
+#cheat-output {
+  color: #aaffaa;
+  font-size: 10px;
+  min-height: 0;
+  white-space: pre-wrap;
 }
 
 #death-screen {
@@ -89,6 +243,14 @@ canvas {
   margin-bottom: 60px;
 }
 
+#death-killer {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 14px;
+  color: #aaa;
+  text-shadow: 2px 2px 0 #000;
+  margin-bottom: 40px;
+}
+
 #death-buttons {
   display: flex;
   flex-direction: column;
@@ -109,4 +271,25 @@ canvas {
 .death-btn:hover {
   background: #444;
   border-color: #aaa;
+}
+
+/* Temple power popup animations */
+@keyframes power-rise {
+  from { transform: translateY(60px); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
+@keyframes power-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* Pause — Magic Items tab */
+#pause-items {
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  max-width: 640px;
+  width: 90%;
+  max-height: 55vh;
+  overflow-y: auto;
 }

@@ -1,12 +1,17 @@
 
 import type { Clue, Person, GameTask } from '../../../shared/src/data/GameData';
 import { AssetManager } from '../engine/AssetManager';
+import { API_BASE, apiFetch } from '../config/api';
 
 export class ClueTrackerUI {
     private container: HTMLElement;
     private contentEl: HTMLElement;
     private assetManager: AssetManager;
     public isOpen: boolean = false;
+    /** Called when the player correctly accuses the demon. Override to trigger the arena fight instead of showing the win modal immediately. */
+    public onDemonAccused: (() => void) | null = null;
+    /** Called with the accusation result (won=true for correct, false for wrong) and the accused person's id. */
+    public onAccuseResult: ((won: boolean, personId: string) => void) | null = null;
 
     constructor(assetManager: AssetManager) {
         this.assetManager = assetManager;
@@ -51,9 +56,15 @@ export class ClueTrackerUI {
         }
     }
 
-    public show(people: Person[], knownClues: Clue[], items: any[], towns: any[], activeTask: GameTask | null, onSelectTask: (task: GameTask) => void) {
+    public show(people: Person[], knownClues: Clue[], items: any[], towns: any[], activeTask: GameTask | null, onSelectTask: (task: GameTask) => void, currentWorldId?: string) {
         this.container.style.display = 'flex';
         this.isOpen = true;
+        // Auto-switch to the player's current town tab if they're inside a town
+        if (currentWorldId) {
+            const metPeople = people.filter(p => p.hasMet);
+            const discoveredTownIds = Array.from(new Set(metPeople.map(p => p.attributes.townId)));
+            if (discoveredTownIds.includes(currentWorldId)) this.currentTab = currentWorldId;
+        }
         this.render(people, knownClues, items, towns, activeTask, onSelectTask);
     }
 
@@ -62,7 +73,8 @@ export class ClueTrackerUI {
         this.isOpen = false;
     }
 
-    public currentTab: string | null = null; // State for selected town tab
+    public currentTab: string | null = null;
+    public currentSort: 'occupation' | 'pet' | 'color' | 'item' = 'occupation';
 
     private render(people: Person[], knownClues: Clue[], items: any[], towns: any[], activeTask: GameTask | null, onSelectTask: (task: GameTask) => void) {
         this.contentEl.innerHTML = '';
@@ -71,27 +83,19 @@ export class ClueTrackerUI {
         const clueSection = document.createElement('div');
         clueSection.innerHTML = '<h3 style="border-bottom: 1px solid #666; padding-bottom: 5px;">COLLECTED CLUES</h3>';
 
-        if (knownClues.length === 0) {
+        const displayedClues = knownClues.filter(c => c.isGood || c.isSpecial);
+        if (displayedClues.length === 0) {
             clueSection.innerHTML += '<p style="color: #888; font-size: 0.8em;">No clues found yet.</p>';
         } else {
             const ul = document.createElement('ul');
             ul.style.paddingLeft = '20px';
 
-            knownClues.forEach(clue => {
+            displayedClues.forEach(clue => {
                 const li = document.createElement('li');
                 li.innerText = clue.text;
                 li.style.marginBottom = '10px';
                 li.style.fontSize = '0.8em';
-
-                // Color code logic
-                if (clue.isSpecial) {
-                    li.style.color = '#4488ff'; // Blue for special occupation power clues
-                } else if (clue.isGood) {
-                    li.style.color = '#00ff00'; // Green for Truths
-                } else {
-                    li.style.color = '#ff4444'; // Red for "BAD" (Negative) clues
-                }
-
+                li.style.color = clue.isSpecial ? '#4488ff' : '#00ff00';
                 ul.appendChild(li);
             });
             clueSection.appendChild(ul);
@@ -115,13 +119,21 @@ export class ClueTrackerUI {
                 this.currentTab = discoveredTownIds[0] || null;
             }
 
-            // Tab Bar
+            // Tab bar row: tabs on the left, sort dropdown on the right
+            const tabRow = document.createElement('div');
+            Object.assign(tabRow.style, {
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'flex-end',
+                marginBottom: '15px',
+                borderBottom: '1px solid #444',
+                paddingBottom: '5px',
+                gap: '10px'
+            });
+
             const tabBar = document.createElement('div');
             tabBar.style.display = 'flex';
             tabBar.style.gap = '5px';
-            tabBar.style.marginBottom = '15px';
-            tabBar.style.borderBottom = '1px solid #444';
-            tabBar.style.paddingBottom = '5px';
             tabBar.style.flexWrap = 'wrap';
 
             discoveredTownIds.forEach(tId => {
@@ -149,13 +161,80 @@ export class ClueTrackerUI {
                 tabBar.appendChild(btn);
             });
 
-            peopleSection.appendChild(tabBar);
+            // Sort dropdown
+            const sortWrap = document.createElement('div');
+            Object.assign(sortWrap.style, {
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                whiteSpace: 'nowrap',
+                flexShrink: '0'
+            });
+
+            const sortLabel = document.createElement('span');
+            sortLabel.innerText = 'SORT:';
+            sortLabel.style.fontSize = '0.65em';
+            sortLabel.style.color = '#888';
+            sortWrap.appendChild(sortLabel);
+
+            const sortSelect = document.createElement('select');
+            Object.assign(sortSelect.style, {
+                backgroundColor: '#222',
+                color: '#ccc',
+                border: '1px solid #555',
+                padding: '4px 6px',
+                fontFamily: 'inherit',
+                fontSize: '0.65em',
+                cursor: 'pointer'
+            });
+
+            const sortOptions: { value: ClueTrackerUI['currentSort']; label: string }[] = [
+                { value: 'occupation', label: 'JOB' },
+                { value: 'pet', label: 'PET' },
+                { value: 'color', label: 'COLOR' },
+                { value: 'item', label: 'ITEM' },
+            ];
+            sortOptions.forEach(opt => {
+                const option = document.createElement('option');
+                option.value = opt.value;
+                option.innerText = opt.label;
+                if (opt.value === this.currentSort) option.selected = true;
+                sortSelect.appendChild(option);
+            });
+
+            sortSelect.onchange = () => {
+                this.currentSort = sortSelect.value as ClueTrackerUI['currentSort'];
+                this.render(people, knownClues, items, towns, activeTask, onSelectTask);
+            };
+
+            sortWrap.appendChild(sortSelect);
+            tabRow.appendChild(tabBar);
+            tabRow.appendChild(sortWrap);
+            peopleSection.appendChild(tabRow);
         }
 
-        // Filter People by Tab
-        const displayedPeople = this.currentTab
+        // Filter People by Tab, sorted by currentSort
+        const getSortValue = (p: Person): string => {
+            switch (this.currentSort) {
+                case 'pet': return p.attributes.pet;
+                case 'color': return p.attributes.color;
+                case 'item': {
+                    const name = items?.find((i: any) => i.id === p.attributes.item)?.name || p.attributes.item || '';
+                    return name.replace(/^(a |an )/i, '');
+                }
+                default: return p.attributes.occupation;
+            }
+        };
+        const displayedPeople = (this.currentTab
             ? metPeople.filter(p => p.attributes.townId === this.currentTab)
-            : metPeople;
+            : metPeople
+        ).slice().sort((a, b) => getSortValue(a).localeCompare(getSortValue(b)));
+
+        // How many slots are still unknown in this town
+        const totalInTab = this.currentTab
+            ? (towns?.find((t: any) => t.id === this.currentTab)?.people?.length ?? 0)
+            : 0;
+        const unknownCount = Math.max(0, totalInTab - displayedPeople.length);
 
         // Helper to check if ruled out
         const isRuledOut = (key: string, value: string): boolean => {
@@ -174,7 +253,7 @@ export class ClueTrackerUI {
             return `<div style="${style}">${label}: <span style="${valStyle}">${value}</span></div>`;
         };
 
-        if (displayedPeople.length === 0) {
+        if (displayedPeople.length === 0 && unknownCount === 0) {
             peopleSection.innerHTML += '<p style="color: #888; font-size: 0.8em;">You haven\'t met anyone yet.</p>';
         } else {
             displayedPeople.forEach(p => {
@@ -306,27 +385,31 @@ export class ClueTrackerUI {
                     marginTop: '10px',
                     alignSelf: 'flex-start'
                 });
-                accuseBtn.onclick = async () => {
-                    if (confirm(`Are you SURE you want to accuse ${p.name}? If you are wrong, you LOSE!`)) {
+                accuseBtn.onclick = () => {
+                    this.showConfirmModal(p.name, async () => {
                         try {
-                            const res = await fetch('http://localhost:3000/api/accuse', {
+                            const res = await apiFetch(`${API_BASE}/api/accuse`, {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({ personId: p.id })
                             });
                             const data = await res.json();
                             if (data.success) {
-                                alert("YOU FOUND THE DEMON! YOU WIN!");
-                                location.reload(); // Simple restart
+                                this.onAccuseResult?.(true, p.id);
+                                if (this.onDemonAccused) {
+                                    this.hide();
+                                    this.onDemonAccused();
+                                } else {
+                                    this.showResultModal(true);
+                                }
                             } else {
-                                alert("WRONG! The demon has escaped. YOU LOSE.");
-                                location.reload(); // Simple restart
+                                this.onAccuseResult?.(false, p.id);
+                                this.showResultModal(false);
                             }
                         } catch (e) {
                             console.error(e);
-                            alert("Error contacting server.");
                         }
-                    }
+                    });
                 };
                 clueCol.appendChild(accuseBtn);
 
@@ -388,8 +471,149 @@ export class ClueTrackerUI {
 
                 peopleSection.appendChild(card);
             });
+
+            // Placeholder cards for people in this town not yet encountered
+            for (let i = 0; i < unknownCount; i++) {
+                const placeholder = document.createElement('div');
+                Object.assign(placeholder.style, {
+                    border: '1px dashed #333',
+                    padding: '10px',
+                    marginBottom: '10px',
+                    fontSize: '0.8em',
+                    display: 'flex',
+                    gap: '10px',
+                    alignItems: 'center',
+                    opacity: '0.4'
+                });
+
+                const spriteBox = document.createElement('div');
+                Object.assign(spriteBox.style, {
+                    minWidth: '64px',
+                    width: '64px',
+                    height: '64px',
+                    backgroundColor: '#111',
+                    display: 'flex',
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                    border: '1px dashed #555',
+                    color: '#555',
+                    fontSize: '1.5em'
+                });
+                spriteBox.innerText = '?';
+                placeholder.appendChild(spriteBox);
+
+                const info = document.createElement('div');
+                info.style.color = '#555';
+                info.innerHTML = '<strong>???</strong><div style="margin-top: 5px; font-size: 0.85em;">Not yet encountered</div>';
+                placeholder.appendChild(info);
+
+                peopleSection.appendChild(placeholder);
+            }
         }
         this.contentEl.appendChild(peopleSection);
+    }
+
+    private showConfirmModal(name: string, onConfirm: () => void) {
+        const overlay = this.makeModalOverlay();
+
+        const box = this.makeModalBox();
+        const msg = document.createElement('div');
+        msg.style.marginBottom = '20px';
+        msg.innerText = `Accuse ${name}?\nIf you are wrong, you LOSE!`;
+        msg.style.whiteSpace = 'pre-wrap';
+        msg.style.textAlign = 'center';
+        box.appendChild(msg);
+
+        const btnRow = document.createElement('div');
+        Object.assign(btnRow.style, { display: 'flex', gap: '20px', justifyContent: 'center' });
+
+        const yes = this.makeModalBtn('YES', '#cc0000');
+        yes.onclick = () => { document.body.removeChild(overlay); onConfirm(); };
+
+        const no = this.makeModalBtn('NO', '#333');
+        no.onclick = () => document.body.removeChild(overlay);
+
+        btnRow.appendChild(yes);
+        btnRow.appendChild(no);
+        box.appendChild(btnRow);
+        overlay.appendChild(box);
+        document.body.appendChild(overlay);
+    }
+
+    public showResultModal(won: boolean) {
+        const overlay = this.makeModalOverlay();
+
+        const box = this.makeModalBox();
+
+        const title = document.createElement('div');
+        title.innerText = won ? 'YOU WIN!' : 'YOU LOSE';
+        Object.assign(title.style, {
+            fontSize: '2em',
+            color: won ? '#00ff00' : '#ff0000',
+            marginBottom: '16px',
+            textShadow: won ? '0 0 10px #00ff00' : '0 0 10px #ff0000'
+        });
+        box.appendChild(title);
+
+        const sub = document.createElement('div');
+        sub.innerText = won ? 'You defeated the demon!' : 'The demon has escaped.';
+        sub.style.marginBottom = '28px';
+        sub.style.color = '#ccc';
+        box.appendChild(sub);
+
+        const btn = this.makeModalBtn('NEW GAME', '#333');
+        btn.onclick = () => location.reload();
+        box.appendChild(btn);
+
+        overlay.appendChild(box);
+        document.body.appendChild(overlay);
+    }
+
+    private makeModalOverlay(): HTMLElement {
+        const overlay = document.createElement('div');
+        Object.assign(overlay.style, {
+            position: 'fixed', top: '0', left: '0', width: '100%', height: '100%',
+            backgroundColor: 'rgba(0,0,0,0.8)',
+            display: 'flex', justifyContent: 'center', alignItems: 'center',
+            zIndex: '1000'
+        });
+        return overlay;
+    }
+
+    private makeModalBox(): HTMLElement {
+        const box = document.createElement('div');
+        Object.assign(box.style, {
+            backgroundColor: '#111',
+            border: '2px solid white',
+            padding: '40px',
+            fontFamily: '"Press Start 2P", monospace',
+            color: 'white',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: '10px',
+            fontSize: '14px',
+            maxWidth: '400px',
+            textAlign: 'center'
+        });
+        return box;
+    }
+
+    private makeModalBtn(label: string, bg: string): HTMLButtonElement {
+        const btn = document.createElement('button');
+        btn.innerText = label;
+        Object.assign(btn.style, {
+            padding: '12px 24px',
+            backgroundColor: bg,
+            color: 'white',
+            border: '1px solid #666',
+            cursor: 'pointer',
+            fontFamily: 'inherit',
+            fontSize: '0.9em'
+        });
+        btn.onmouseover = () => btn.style.filter = 'brightness(1.3)';
+        btn.onmouseout = () => btn.style.filter = '';
+        return btn;
     }
 
 }
