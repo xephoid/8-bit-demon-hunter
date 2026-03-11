@@ -1,5 +1,5 @@
 const install_args1 = ['install'];
-const install_args2 = ['install', '--only=dev', '--no-shrinkwrap'];
+const install_args2 = ['install', '--include=dev', '--no-shrinkwrap'];
 const build_args_backend = ['run', 'build'];
 const build_args_client = ['run', 'build'];
 
