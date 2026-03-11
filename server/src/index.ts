@@ -40,9 +40,7 @@ function track(sessionId: string, event: string, properties?: Record<string, any
     }).catch(() => {});
 }
 
-app.get('/', (req, res) => {
-    res.send('Miniburger API');
-});
+// Root route was removed to allow the SPA to serve index.html
 
 app.get('/api/config', (req, res) => {
     res.json(gameConfig);
@@ -161,6 +159,20 @@ app.post('/api/track', (req, res) => {
 
 // Prune sessions idle for more than 30 minutes, checked every 5 minutes
 setInterval(() => GameState.pruneInactiveSessions(), 5 * 60 * 1000);
+
+// --- Serve Frontend ---
+import path from 'path';
+
+// Serve built frontend files
+const clientDistPath = path.join(__dirname, '../../../../client/dist');
+console.log('Serving static files from:', clientDistPath);
+app.use(express.static(clientDistPath));
+
+// Catch-all route to serve the SPA
+app.use((req, res) => {
+    console.log('Catch-all reached for url:', req.url);
+    res.sendFile(path.join(clientDistPath, 'index.html'));
+});
 
 app.listen(port, () => {
     console.log(`Server running at http://localhost:${port}`);

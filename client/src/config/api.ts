@@ -1,4 +1,4 @@
-export const API_BASE: string = (import.meta.env.VITE_API_URL as string) ?? 'http://localhost:3000';
+export const API_BASE: string = (import.meta.env.VITE_API_URL as string) ?? (import.meta.env.PROD ? '' : 'http://localhost:3000');
 
 const SESSION_KEY = 'miniburger_session';
 function getOrCreateSessionId(): string {

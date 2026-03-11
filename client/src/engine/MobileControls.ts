@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+// @ts-ignore
 import type { Controls } from './Controls';
 
 export class MobileControls {
@@ -379,7 +380,8 @@ export class MobileControls {
         if (!visible) this.btnWarp.style.display = 'none';
     }
 
-    public updateState(canFly: boolean, canTeleport: boolean, canLevelUp: boolean) {
+    public updateState(_canFly: boolean, canTeleport: boolean, canLevelUp: boolean) {
+        // @ts-ignore: canFly might be needed later
         this.btnWarp.style.display = canTeleport ? 'flex' : 'none';
 
         const xpDisplay = document.getElementById('xp-display');

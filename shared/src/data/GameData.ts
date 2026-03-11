@@ -1,42 +1,45 @@
-export enum Occupation {
-    Carpenter = 'Carpenter',
-    Barber = 'Barber',
-    Soldier = 'Soldier',
-    Musician = 'Musician',
-    Farmer = 'Farmer',
-    Blacksmith = 'Blacksmith',
-    Merchant = 'Merchant',
-    Tailor = 'Tailor',
-    Locksmith = 'Locksmith',
-    Mayor = 'Mayor'
-}
+export const Occupation = {
+    Carpenter: 'Carpenter',
+    Barber: 'Barber',
+    Soldier: 'Soldier',
+    Musician: 'Musician',
+    Farmer: 'Farmer',
+    Blacksmith: 'Blacksmith',
+    Merchant: 'Merchant',
+    Tailor: 'Tailor',
+    Locksmith: 'Locksmith',
+    Mayor: 'Mayor'
+} as const;
+export type Occupation = typeof Occupation[keyof typeof Occupation];
 
-export enum Pet {
-    Dog = 'Dog',
-    Cat = 'Cat',
-    Fish = 'Fish',
-    Bird = 'Bird',
-    Snake = 'Snake',
-    Lizard = 'Lizard',
-    Hamster = 'Hamster',
-    Rabbit = 'Rabbit',
-    Turtle = 'Turtle',
-    Ferret = 'Ferret',
-    Horse = 'Horse',
-    Cow = 'Cow',
-    Sheep = 'Sheep',
-    Pig = 'Pig',
-    Chicken = 'Chicken'
-}
+export const Pet = {
+    Dog: 'Dog',
+    Cat: 'Cat',
+    Fish: 'Fish',
+    Bird: 'Bird',
+    Snake: 'Snake',
+    Lizard: 'Lizard',
+    Hamster: 'Hamster',
+    Rabbit: 'Rabbit',
+    Turtle: 'Turtle',
+    Ferret: 'Ferret',
+    Horse: 'Horse',
+    Cow: 'Cow',
+    Sheep: 'Sheep',
+    Pig: 'Pig',
+    Chicken: 'Chicken'
+} as const;
+export type Pet = typeof Pet[keyof typeof Pet];
 
-export enum Color {
-    Red = 'Red',
-    Blue = 'Blue',
-    Green = 'Green',
-    Yellow = 'Yellow',
-    Purple = 'Purple',
-    Pink = 'Pink'
-}
+export const Color = {
+    Red: 'Red',
+    Blue: 'Blue',
+    Green: 'Green',
+    Yellow: 'Yellow',
+    Purple: 'Purple',
+    Pink: 'Pink'
+} as const;
+export type Color = typeof Color[keyof typeof Color];
 
 export interface Item {
     id: string;
@@ -44,12 +47,13 @@ export interface Item {
     description: string;
 }
 
-export enum TaskType {
-    KILL = 'KILL',
-    FIND_PERSON = 'FIND_PERSON',
-    FIND_ITEM = 'FIND_ITEM',
-    ESCORT = 'ESCORT'
-}
+export const TaskType = {
+    KILL: 'KILL',
+    FIND_PERSON: 'FIND_PERSON',
+    FIND_ITEM: 'FIND_ITEM',
+    ESCORT: 'ESCORT'
+} as const;
+export type TaskType = typeof TaskType[keyof typeof TaskType];
 
 export interface GameTask {
     id: string;

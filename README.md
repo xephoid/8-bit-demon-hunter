@@ -377,3 +377,6 @@ Challenge is timed, you have a certain amount of time to find the demon
 - The dungeon is a maze with the demon as a boss
 - After killing the demon you unlock a new world with more towns and new monsters, all new people and a new demon
 - Different worlds are show by changing the images for the terrain and monsters
+
+
+ngrok --config ~/ngrok.yml start --all  

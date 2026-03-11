@@ -1,0 +1,28 @@
+{
+  "name": "8-bit-demon-hunter",
+  "version": "1.0.0",
+  "description": "Mini Burger",
+  "keywords": [
+    "rpg",
+    "puzzle",
+    "3d",
+    "action"
+  ],
+  "homepage": "https://github.com/xephoid/8-bit-demon-hunter#readme",
+  "bugs": {
+    "url": "https://github.com/xephoid/8-bit-demon-hunter/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xephoid/8-bit-demon-hunter.git"
+  },
+  "license": "ISC",
+  "author": "Zeke Swepson",
+  "type": "commonjs",
+  "main": "start-app.js",
+  "scripts": {
+    "start": "node start-app.js",
+    "heroku-postbuild": "node start-build.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  }
+}
