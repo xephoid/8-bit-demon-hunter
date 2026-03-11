@@ -64,7 +64,7 @@ const init = async () => {
 
   // 2. Load Assets
   const assetManager = new AssetManager();
-  const manifestResponse = await fetch('/src/data/assets.json');
+  const manifestResponse = await fetch('/data/assets.json');
   const manifest = await manifestResponse.json();
 
   await assetManager.loadAssets(manifest);
