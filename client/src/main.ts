@@ -798,6 +798,8 @@ const init = async () => {
   // --- START SCREEN ---
   const startScreen = new StartScreenUI();
   startScreen.show();
+  const loadingScreen = document.getElementById('loading-screen');
+  if (loadingScreen) loadingScreen.style.display = 'none';
 
   startScreen.onFirstInteract = () => {
     audio.resume();
