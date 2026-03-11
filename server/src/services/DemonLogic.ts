@@ -181,17 +181,25 @@ export class DemonLogic {
 
         // Demon & Minion Lies
         const liars = [demon, ...minions];
-        liars.forEach(liar => {
-            const lieTarget = Math.random();
-            let lieText = "", lieAttr: any = undefined;
-            if (lieTarget < 0.25) { lieText = `The demon is not a ${demon.attributes.occupation}`; lieAttr = { key: 'occupation', value: demon.attributes.occupation || "" }; }
-            else if (lieTarget < 0.5) { lieText = `The demon does not have a ${demon.attributes.pet}`; lieAttr = { key: 'pet', value: demon.attributes.pet || "" }; }
-            else if (lieTarget < 0.75) { lieText = `The demon does not like ${demon.attributes.color}`; lieAttr = { key: 'color', value: demon.attributes.color || "" }; }
-            else {
-                const demonTownName = state.towns.find(t => t.id === demon.attributes.townId)?.name || "Unknown Town";
-                lieText = `The demon is not in ${demonTownName}`; lieAttr = { key: 'townId', value: demon.attributes.townId || "" };
-            }
-            liar.clues.bad = { text: lieText, isGood: false, relatedAttribute: lieAttr };
+        const demonTownName = state.towns.find(t => t.id === demon.attributes.townId)?.name || "Unknown Town";
+        const lieOptions: { text: string; relatedAttribute: any }[] = [
+            { text: `The demon is not a ${demon.attributes.occupation}`, relatedAttribute: { key: 'occupation', value: demon.attributes.occupation || "" } },
+            { text: `The demon does not have a ${demon.attributes.pet}`, relatedAttribute: { key: 'pet', value: demon.attributes.pet || "" } },
+            { text: `The demon does not like ${demon.attributes.color}`, relatedAttribute: { key: 'color', value: demon.attributes.color || "" } },
+            { text: `The demon is not in ${demonTownName}`, relatedAttribute: { key: 'townId', value: demon.attributes.townId || "" } },
+        ];
+        // Add item lie only if demon actually has an item
+        if (demon.attributes.item && demon.attributes.item !== 'None') {
+            const demonItemName = state.items.find((i: any) => i.id === demon.attributes.item)?.name || demon.attributes.item;
+            lieOptions.push({ text: `The demon does not have ${demonItemName}`, relatedAttribute: { key: 'item', value: demon.attributes.item } });
+        }
+        // Build pool with each lie appearing at most 2 times, then shuffle
+        const liePool: typeof lieOptions = [];
+        for (const opt of lieOptions) liePool.push(opt, { ...opt });
+        DemonLogic.shuffle(liePool);
+        liars.forEach((liar, i) => {
+            const chosen = liePool[i % liePool.length];
+            liar.clues.bad = { text: chosen.text, isGood: false, relatedAttribute: chosen.relatedAttribute };
         });
     }
 
@@ -314,11 +322,11 @@ export class DemonLogic {
 
         // Magic Item Tasks (one per temple — completed by finding the item in the temple)
         const MAGIC_ITEMS = [
-            { templeType: 'sky',   name: 'Amulet of Flight' },
+            { templeType: 'sky', name: 'Amulet of Flight' },
             { templeType: 'earth', name: 'Aura of Protection' },
             { templeType: 'space', name: 'Cape of Teleportation' },
             { templeType: 'light', name: 'Eye of Truth' },
-            { templeType: 'fire',  name: 'Fire Bomb' },
+            { templeType: 'fire', name: 'Fire Bombs' },
         ];
         MAGIC_ITEMS.forEach(item => {
             taskPool.push({
@@ -346,6 +354,7 @@ export class DemonLogic {
         this.shuffle(otherTasks);
 
         const goodClueHolders = people.filter(p => p.clues?.good);
+        this.shuffle(goodClueHolders);
         const assigned = new Set<string>();
 
         // First pass: give every Merchant an escort task (Merchants are travel traders — escort fits their role)

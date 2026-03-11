@@ -13,5 +13,8 @@ export const gameConfig = {
     controls: {
         speed: 10.0,
         sensitivity: 0.002
+    },
+    api: {
+        baseUrl: 'http://localhost:3000/api'
     }
 };

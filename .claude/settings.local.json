@@ -5,7 +5,10 @@
       "Bash(python -c:*)",
       "Bash(python -:*)",
       "Bash(python:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(./node_modules/.bin/tsc:*)",
+      "Bash(echo:*)",
+      "Bash(grep:*)"
     ]
   }
 }

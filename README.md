@@ -181,10 +181,10 @@ Powers:
 | ---------- | -------------------------------------------------------------------------- | ----------------------------------------------------- | -------------------------------------------------- |
 | Farmer     | Tells the player if they have met the demon                                | "You have/ have not met the demon yet."               | ""                                                 |
 | Musician   | Tells the player how many minions are in the current town                  | "There are [number] minions in this town."            | ""                                                 |
-| Barber     | Introduces the player to a random numer of people between 1 and 5          | "I have introduced you to [number] people."           | Adds the people to the clue tracker                |
+| Barber     | Introduces the player to a random person from another town                 | "I have introduced you to [number] people."           | Adds the people to the clue tracker                |
 | Tailor     | Tells the player if someone in town is lying                xcc            | "Some poeple/No one in this town are/is lying."       | Add to clue tracker (special clue)                 |
 | Mayor      | Introduces the player to everyone in town                                  | "I have introduced you to everyone in town."          | Adds all people in town to the clue tracker        |
-| Merchant   | Introduces the player to a random person from another town                 | "Let me introduce you to [name] from [town]."         | Adds the person to the clue tracker                |
+| Merchant   | Introduces the player to a random numer of people between 1 and 5          | "Let me introduce you to [name] from [town]."         | Adds the person to the clue tracker                |
 | Soldier    | Give the player 20 xp                                                      | "Nice training session!."                             | ""                                                 |
 | Blacksmith | Improves one of the player's stats by 1                                    | "Hope this helps you in your quest."                  | Functionally same as leveling up                   |
 | Carpenter  | Gives a location base bad clue                                             | "The demon is not in [location]."                     | Should be a clue that isn't known by any other NPC |
@@ -193,6 +193,97 @@ Powers:
 
 Special Clues:
 Special clues show up in the clue tracker as blue
+
+## Rock Walls
+In addition to normal walls in the overworld there are also destructable rock walls. they are the same hieght as the current walls in the overworld. Rock walls are impassable the same as normal walls, but can be flown over with the amulet of flying. The player cannot land on them. If they press the land button while over rocks nothing happens.
+
+Generation:
+Ten small clusters (3-4 tiles in a T ro L shape) of rock walls should be randomly scattered throughout the world. Then a larger cluster can fill in the currently empty spaces that get carved out (-3x the radius of the clearing). May need to check if they are obstructing the player from reaching a part of the map?
+
+The sky temple should be surrounded by a rock wall so it is impossible to enter without firebombs. The radious of the wall should be 10 - 15 tiles. This may require some new rules for when generating the sky temple since we don't want a town ending up inside it's radius. It is ok if enemies spawn inside the radious.
+
+Firebombs:
+Instead of Firebombs destroying regular walls they only destroy rock walls. They still regenerate when the player returns to the overworld from another location.
+
+Dev notes:
+- texture file for rock walls: terrain_6_18.png
+
+## Demon Bindings
+To give players who don't like combat an alternative to defeating the demon each minion will know a different demon binding that when found by the player reduces the demon's health by 2 (hits to kill, not actual hp). If the player has found all bindings the demon dies immediately when the player enters the arena. To find bindings the player must figure out who the minions are and break into their house to find the binding. For now it won't be possible for the player to get all the demon bindings.
+
+New Town Feature:
+Each town already has a building for each person in the town. Will need to add a sign (objects_6_3.png) in front of each house. When the player interacts with the sign it should display the person's name like "[name]'s House".
+If a player interacts with a door a dialog opens that simple says "Locked".
+
+The large building in town will be the Inn. The texture for a single wall tile on the inn is tile_0_26.png. For now interacting with the inn door restores the player's health to full. Simply entering a town should no longer restore the player's health.
+
+New Occupation:
+Locksmith - Replaces the Baker. When the player completes a task for the locksmith the locksmith will unlock the door to one person's house. This is the Locksmith ability. The player must choose which house to unlock by going to the house and interacting with the door. This only works for one house. Once unlocked the house remains unlocked for the rest of the game. If the house is owned by a minion an unlocked door will give the player a demon binding and will say "You found a demon binding!" This will only trigger once and futher attempts will say "You already searched this house." If the house is not owned by a minion an unlocked door will display "Nothing of note here."
+Locksmiths always have Find Item tasks (currently unused).
+
+Tracking:
+In the clue tracker in a new column next to the good and special clues column add a column for the demon bindings found. When a player finds a demon binding it should be added to this column. For now they can just be numbered like "Demon Binding 1" "Demon Binding 2" etc. They should be Purple.
+
+Adjustments:
+- 2 minions per town for a total of 10
+- increase the demon's health to 20 (not actually hp, but total hits to kill the demon since we scaled it up based on strength)
+
+Starting Game change:
+The player starts inside a town. This will change some of how world generation works. All world generating rules about distance to the player should be based on the town the player starts in.
+
+## Resources
+Add resources to the world that can be harvested, bought and sold. First there will be a currency called shuckles. The player will start with 5 shuckles. The shuckle symbol is 🐚. In addition to shuckles there will be 6 resources that can be found in the world.
+
+| Name         | Base Value | Where to get                                     | Icon                      | World Object     |
+| ------------ | ---------- | ------------------------------------------------ | ------------------------- | ---------------- |
+| Plant Fibers | 1          | Attacking plants in the overworld (1hp)          | resource_plant_fiber.png  | terrian_2_11.png |
+| Wood         | 2          | Attacking trees in the overworld (4hp)           | resource_wood.png         | terrian_4_10.png |
+| Demon Powder | 3          | Kill enemies in the overworld accept for bandits | resource_demon_powder.png | various          |
+| Demon Ichor  | 4          | Kill enemies in temples                          | resource_demon_ichor.png  | various          |
+| Iron Ore     | 5          | Blow up rock walls with bombs (40% drop chance)  | resource_iron_ore.png     | terrian_6_18.png |
+| Gold         | 6          | Blow up rock walls with bombs (10% drop chance)  | resource_gold_ore.png     | terrian_6_18.png |
+
+New World Generation:
+Plant fibers and wood can be found in the overworld. The player can attack trees and plants to harvest them. The player can also attack enemies to get Demon Powder and Demon Ichor. Plants and trees will be 1hp and 4hp respectively. Add 50 plants and 20 trees to the overworld randomly.
+
+New Inn Features:
+Instead of only health restoration the inn will also buy and sell resource. Each town will have different value multipliers for each resource. The multiplier will range from 1 to 6 and will be different for each resource. Multipliers are applied to the base value of each resource. So one town might buy/sell plant fibers for 1 shuckle each while another town will buy/sell plant fibers for 6 shuckles each. The Inn's buy price will be 75% of the sell price rounded down. The minimum buy price will be 1 shuckle. So the player can always sell resources for at least 1 shuckle. Each town will have a different distribution of multipliers so that the player can buy resources from one town and sell them to another for profit.
+There should also be an option to sleep at the inn. Sleeping at the inn will cost 5 shuckles. This will restore the player's health to full making it no longer free.
+In addition to buying/selling and sleeping the player can also pay for an escort to another town. This will cost 50 shuckles and will open a menu where the player can select a town to be escorted to. The player will be teleported to the town. Unlike the Cape of Teleportation the player can choose to get an escort to any town.
+One more Inn feature. The player can pay for training. Training will cost 50 shuckles a will give the player 20xp.
+
+Reward change:
+Instead of the Merchant introducing the player to random npcs the Merchant will give the player 50 shuckles. The old Merchant ability will be given to the Barber and the Barber's old ability will be removed.
+
+New Lady Bandit Interaction:
+In addition to fighting lady bandits the player can also press E to trade with a lady bandit. The bandit will sell the player single use bombs for 100 shuckles each and a lockpick for 200 shuckles. The bandit will not buy anything from the player. Tha bandit will not trade with the player if the player has attacked the bandit. If the player buys from the bandit the bandit will disappear after the trade dialog closes.
+
+Single Use bombs are bombs that can only be used once. If the player uses a single use bomb it will be removed from their inventory.
+
+Lockpicks are tools that can be used to unlock doors. If the player uses a lockpick it will be removed from their inventory. If the player interacts with a locked door while holding 1 or more lockpicks they may choose to use one lockpick to unlock the door. The Locksmith ability has priority over this meaning the player will automatically use the Locksmith ability if they have it and the door is locked.
+
+New UI:
+When a resource is collected a counter should appear on the left center of the screen for a moment with the total amount of that resource the player now has. This can stack up to 3 counters at a time. This shoule be true for all resources including shuckles, single use bombs and lockpicks.
+In the Pause menue their should be a new tab for resources. This tab should display the total amount of each resource the player has.
+Bombs and lockpick counters should be at the bottom of the resources tab.
+
+## NPC Enhanced dialog
+In addition to the npcs current dialog I would like to add a new section of text where the npc either says some lore or gives the player a tip about the game. This text should appear above where the current quest dialog appears. I have added a gameTipRegistry and a loreRegistry to the gameConfig file. Each npc should be assigned a unique bit of dialog.
+The text should always show up above whatever task related information is bellow it.
+
+Allocation:
+All the game tips should be assigned to the npcs in the town the player starts in. All the lore should then be assigned randomly to every other npc. Again, each npc should have unique dialog. No two nps should say the same thing. The npc should alays say the same thing when initially spoken to.
+
+World Lore (For reference):
+I. There was a powerful wizard named Memlax
+II. Memlax was married to a sorceress named Chineera
+III. One day Chineera became very ill
+IV. Memlax made a deal with a demon to save Chineera's life
+V. Afterwards Memlax slowly began to turn evil and took over the world
+VI. Chineera, realizeing the demon had taken over Memlax, escaped and started a rebellion to fight against the demon.
+VII. The rebellion created 5 magical items to help Chineera defeat the demon
+VIII. Chineera defeated the demon, but died in the process
+IX. Presently the demon has returned is it trying to regain power
 
 ## Temples
 In addition to towns randomly in the world there will be temples. These will not be marked on the mini map. The map of each temple will be a maze generated using the drunken walk algorithm. Corridors will be 2 tiles wide and 2 tiles high. The start of the maze will be a random outer edge of the map and the end will be where the drunken walk algorithm stops. The exit will be at the start so the player can leave if they choose. At the end will be a chest with a specific magic item that will grant the player a permanent special power. The temple will also have a unique enemy (per temple).
@@ -236,6 +327,7 @@ In order to test this without having to find the demon the player should be able
 - jace: reveals all good clues
 - passport [town_id]: Teleports the player to a town with the given id
 - krang: Immediately gives the player 100xp
+- strange: Grants the player all magic items
 
 ## Maybe
 

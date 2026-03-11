@@ -5,6 +5,7 @@ export class DialogueUI {
     private container: HTMLElement;
     private nameEl: HTMLElement;
     private infoEl: HTMLElement;
+    private tipEl: HTMLElement;
     private textEl: HTMLElement;
     private optionsEl: HTMLElement;
 
@@ -17,24 +18,38 @@ export class DialogueUI {
     constructor() {
         this.container = document.createElement('div');
         this.container.id = 'dialogue-ui';
+        const isMobile = window.innerWidth < 860;
+
+        // Outer container: visual frame only, no overflow handling
         Object.assign(this.container.style, {
-            position: 'absolute',
-            bottom: '20px',
+            position: isMobile ? 'fixed' : 'absolute',
+            bottom: isMobile ? '12px' : '20px',
             left: '50%',
             transform: 'translateX(-50%)',
-            width: '800px',
+            width: isMobile ? `${window.innerWidth - 24}px` : '800px',
             backgroundColor: 'rgba(0, 0, 0, 0.9)',
             border: '2px solid white',
-            padding: '20px',
             color: 'white',
             fontFamily: '"Press Start 2P", monospace',
             display: 'none',
-            flexDirection: 'row',
-            gap: '20px',
-            zIndex: '100',
+            zIndex: '600',
             boxShadow: '0 0 10px rgba(0,0,0,0.5)'
         });
         document.body.appendChild(this.container);
+
+        // Inner scroll wrapper: owns max-height + overflow so it scrolls independently
+        // of the flexbox layout, which avoids the "flex overflow doesn't scroll" bug.
+        const scrollWrapper = document.createElement('div');
+        Object.assign(scrollWrapper.style, {
+            maxHeight: isMobile ? '70dvh' : '',
+            overflowY: isMobile ? 'scroll' : 'visible',
+            padding: '20px',
+            display: 'flex',
+            flexDirection: isMobile ? 'column' : 'row',
+            gap: '20px',
+        });
+        if (isMobile) (scrollWrapper.style as any).WebkitOverflowScrolling = 'touch';
+        this.container.appendChild(scrollWrapper);
 
         // --- Left Column (Interaction) ---
         const leftCol = document.createElement('div');
@@ -44,12 +59,25 @@ export class DialogueUI {
             flex: '1',
             gap: '15px'
         });
-        this.container.appendChild(leftCol);
+        scrollWrapper.appendChild(leftCol);
 
         this.nameEl = document.createElement('div');
         this.nameEl.style.color = '#ffd700'; // Gold
         this.nameEl.style.marginBottom = '5px';
         leftCol.appendChild(this.nameEl);
+
+        this.tipEl = document.createElement('div');
+        Object.assign(this.tipEl.style, {
+            fontStyle: 'italic',
+            color: '#aaaaaa',
+            fontSize: '0.8em',
+            lineHeight: '1.6',
+            marginBottom: '10px',
+            paddingBottom: '10px',
+            borderBottom: '1px solid #444',
+            display: 'none',
+        });
+        leftCol.appendChild(this.tipEl);
 
         this.textEl = document.createElement('div');
         this.textEl.style.lineHeight = '1.5';
@@ -65,14 +93,16 @@ export class DialogueUI {
         const rightCol = document.createElement('div');
         Object.assign(rightCol.style, {
             width: '250px',
-            borderLeft: '1px solid #444',
-            paddingLeft: '20px',
+            borderLeft: isMobile ? 'none' : '1px solid #444',
+            borderTop: isMobile ? '1px solid #444' : 'none',
+            paddingLeft: isMobile ? '0' : '20px',
+            paddingTop: isMobile ? '15px' : '0',
             display: 'flex',
             flexDirection: 'column',
             fontSize: '0.8em',
             color: '#ccc'
         });
-        this.container.appendChild(rightCol);
+        scrollWrapper.appendChild(rightCol);
 
         this.infoEl = document.createElement('div');
         rightCol.appendChild(this.infoEl);
@@ -95,6 +125,13 @@ export class DialogueUI {
         this.isOpen = true;
 
         this.nameEl.innerText = `${person.name} the ${person.attributes.occupation} ` + (person.isMinion && person.taskCompleted ? "(Minion)" : "");
+
+        if (person.tip) {
+            this.tipEl.innerText = `"${person.tip}"`;
+            this.tipEl.style.display = 'block';
+        } else {
+            this.tipEl.style.display = 'none';
+        }
 
         // Populate attribute info panel
         const itemName = items.find(i => i.id === person.attributes.item)?.name || person.attributes.item || "None";
@@ -206,7 +243,7 @@ export class DialogueUI {
         // 2. No active task OR task from someone else
         else {
             if (person.taskCompleted) {
-                this.textEl.innerText = Dialogue.alreadyHelped;
+                this.textEl.innerText = person.isMinion ? Dialogue.minionTaskDone : Dialogue.alreadyHelped;
                 addButton(Dialogue.buttons.goodbye, () => this.hide());
             } else {
                 const taskDesc = person.task.description;

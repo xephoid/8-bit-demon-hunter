@@ -7,13 +7,23 @@ import { DemonLogic } from './DemonLogic';
 export class WorldGenerator {
     private width: number;
     private height: number;
+    private townLayoutCache: Map<string, any> = new Map();
+    private townPriceCache: Map<string, Record<string, number>> = new Map();
 
     constructor() {
         this.width = gameConfig.world.width;
         this.height = gameConfig.world.height;
     }
 
+    public clearTownCache(): void {
+        this.townLayoutCache.clear();
+        this.townPriceCache.clear();
+    }
+
     public async generateDemonHunterWorld(sessionId: string): Promise<any> {
+        // Clear cached town layouts so this new game gets fresh building placements
+        this.clearTownCache();
+
         // 1. Generate Towns
         const towns: Town[] = [];
         const townCount = gameConfig.world.roomCount;
@@ -48,6 +58,46 @@ export class WorldGenerator {
         const allPeople = towns.flatMap(t => t.people);
         const puzzleData = DemonLogic.generatePuzzle(towns, allPeople);
 
+        // 3a. Assign FIND_ITEM tasks to all Locksmiths (items are now assigned)
+        const allItems = puzzleData.items || [];
+        let findItemTaskSeed = 0;
+        allPeople.forEach(person => {
+            if (person.attributes.occupation === Occupation.Locksmith && allItems.length > 0) {
+                const targetPerson = allPeople[findItemTaskSeed % allPeople.length];
+                const targetItem = allItems.find((item: Item) => item.id === targetPerson.attributes.item);
+                findItemTaskSeed++;
+                if (targetItem) {
+                    person.task = {
+                        id: `task_locksmith_${person.id}`,
+                        type: TaskType.FIND_ITEM,
+                        targetId: targetItem.id,
+                        targetName: targetItem.name,
+                        amount: 1,
+                        currentAmount: 0,
+                        description: `Find who has ${targetItem.name} and report back`,
+                        reward: 'CLUE',
+                        giverId: person.id,
+                        isCompleted: false
+                    };
+                }
+            }
+        });
+
+        // 3b. Assign tips & lore — starting town gets game tips, all others get lore
+        const tips = [...gameConfig.gameTipsRegistry];
+        this.shuffle(tips);
+        towns[0].people.forEach((person, i) => {
+            person.tip = tips[i % tips.length];
+        });
+        const lore = [...gameConfig.loreRegistry];
+        this.shuffle(lore);
+        let loreIdx = 0;
+        towns.slice(1).forEach(town => {
+            town.people.forEach(person => {
+                person.tip = lore[loreIdx++];
+            });
+        });
+
         // 4. Save to GameState
         const state: DemonHunterState = {
             demonId: puzzleData.demonId || "",
@@ -68,10 +118,12 @@ export class WorldGenerator {
     }
 
     public convertTownToWorld(town: Town): IWorld {
-        // Convert Town back to IWorld format for the client
-        // Re-generate walls from town data or store them in Town?
-        // For now, re-call generateTown to get walls (inefficient but works for prototype)
-        const townData = this.generateTown(town.id, town.name);
+        // Use cached layout so re-entering a town gives the same building positions
+        let townData = this.townLayoutCache.get(town.id);
+        if (!townData) {
+            townData = this.generateTown(town.id, town.name);
+            this.townLayoutCache.set(town.id, townData);
+        }
         const walls = townData.walls;
 
         // Helper to find safe spot
@@ -116,15 +168,35 @@ export class WorldGenerator {
         // Add Exit Zone Entity (Visual)? Or handled by Door?
         // Door is handled by client LevelBuilder usually.
 
+        // Build housePeople mapping: door_${townId}_house_${i} -> person.id
+        const housePeople: { [key: string]: string } = {};
+        town.people.forEach((person, i) => {
+            housePeople[`door_${town.id}_house_${i}`] = person.id;
+        });
+
+        // Use cached price multipliers so inn prices are consistent across visits
+        const resources = ['plant_fiber', 'wood', 'demon_powder', 'demon_ichor', 'iron_ore', 'gold'];
+        let priceMultipliers = this.townPriceCache.get(town.id);
+        if (!priceMultipliers) {
+            priceMultipliers = {};
+            for (const r of resources) {
+                priceMultipliers[r] = Math.floor(Math.random() * (gameConfig.resources.priceMultiplierMax - gameConfig.resources.priceMultiplierMin + 1)) + gameConfig.resources.priceMultiplierMin;
+            }
+            this.townPriceCache.set(town.id, priceMultipliers);
+        }
+
         return new World({
             customId: town.id,
             width: townData.width,
             height: townData.height,
             type: 'city',
             walls: townData.walls,
-            doors: townData.doors, // Exits
+            doors: townData.doors,
             spawnPoints: [{ x: 20, y: 37 }],
-            entities: entities
+            entities: entities,
+            housePeople: housePeople,
+            innRect: townData.hallRect || undefined,
+            priceMultipliers: priceMultipliers
         });
     }
 
@@ -353,8 +425,20 @@ export class WorldGenerator {
             return placed;
         };
 
-        // 2a. Place Town Hall (One, 6x5)
+        // 2a. Place Town Hall (Inn) — 6x5 building
+        let hallRect: { x: number, y: number, w: number, h: number } | null = null;
+        const hallDoorBefore = doors.length;
         placeBuilding(6, 5, 'hall', 'hall');
+        if (doors.length > hallDoorBefore) {
+            // Hall was placed — find it from buildings (last building before houses)
+            const hallBuilding = buildings[0]; // hall is placed first
+            if (hallBuilding) {
+                hallRect = { x: hallBuilding.x, y: hallBuilding.y, w: hallBuilding.w, h: hallBuilding.h };
+                // Change the hall door type to 'inn'
+                const hallDoor = doors.find((d: any) => d.id === `door_${id}_hall`);
+                if (hallDoor) hallDoor.type = 'inn';
+            }
+        }
 
         // 2b. Place Houses (Equal to Population)
         for (let i = 0; i < population; i++) {
@@ -371,7 +455,8 @@ export class WorldGenerator {
             walls,
             entities,
             doors: doors,
-            spawnPoints: [{ x: 20, y: 37 }]
+            spawnPoints: [{ x: 20, y: 37 }],
+            hallRect: hallRect
         };
     }
 
@@ -424,6 +509,7 @@ export class WorldGenerator {
         }
 
         // Add 3 random waypoints and connect each to its nearest city to expand the world
+        const waypoints: { x: number, y: number }[] = [];
         for (let w = 0; w < 3; w++) {
             const wx = Math.floor(Math.random() * (this.width - 20)) + 10;
             const wy = Math.floor(Math.random() * (this.height - 20)) + 10;
@@ -432,6 +518,7 @@ export class WorldGenerator {
                 Math.sqrt((best.x - wx) ** 2 + (best.y - wy) ** 2) ? c : best
             );
             this.carvePath(walls, nearest.x, nearest.y, wx, wy);
+            waypoints.push({ x: wx, y: wy });
         }
 
         // 4a. Place 5 temples (not marked on minimap)
@@ -516,8 +603,8 @@ export class WorldGenerator {
                 const ey = 1 + Math.floor(Math.random() * (this.height - 2));
 
                 if (!walls[ex][ey]) {
-                    const tooClose = doors.some(d => Math.sqrt((d.x - ex) ** 2 + (d.y - ey) ** 2) < 8);
                     const minDist = SPAWN_MIN_DIST[type] ?? 10;
+                    const tooClose = doors.some(d => Math.sqrt((d.x - ex) ** 2 + (d.y - ey) ** 2) < minDist);
                     const tooCloseToPlayer = Math.sqrt((playerSpawn.x - ex) ** 2 + (playerSpawn.y - ey) ** 2) < minDist;
 
                     // Also check neighbors
@@ -590,15 +677,48 @@ export class WorldGenerator {
             }
         });
 
+        // Spawn harvestable plants and trees
+        const plantCount = gameConfig.resources.overworldPlantCount;
+        const treeCount = gameConfig.resources.overworldTreeCount;
+
+        for (let i = 0; i < plantCount; i++) {
+            for (let attempt = 0; attempt < 100; attempt++) {
+                const ex = Math.floor(Math.random() * (this.width - 2)) + 1;
+                const ey = Math.floor(Math.random() * (this.height - 2)) + 1;
+                const tooClose = doors.some(d => Math.sqrt((d.x - ex) ** 2 + (d.y - ey) ** 2) < 5);
+                if (!walls[ex][ey] && !tooClose) {
+                    entities.push({ type: 'plant', name: `plant_${i}`, x: ex, y: ey, properties: { hp: 1, xp: 0 } });
+                    break;
+                }
+            }
+        }
+
+        for (let i = 0; i < treeCount; i++) {
+            for (let attempt = 0; attempt < 100; attempt++) {
+                const ex = Math.floor(Math.random() * (this.width - 2)) + 1;
+                const ey = Math.floor(Math.random() * (this.height - 2)) + 1;
+                const tooClose = doors.some(d => Math.sqrt((d.x - ex) ** 2 + (d.y - ey) ** 2) < 5);
+                if (!walls[ex][ey] && !tooClose) {
+                    entities.push({ type: 'tree', name: `tree_${i}`, x: ex, y: ey, properties: { hp: 4, xp: 0 } });
+                    break;
+                }
+            }
+        }
+
+        const skyTempleIdx = 0; // temple_sky is index 0 in templeList
+        const rockWalls = this.generateRockWalls(walls, cities, templeLocs, skyTempleIdx, waypoints);
+
         const world = new World({
             customId: 'world_main',
             width: this.width,
             height: this.height,
             type: 'world',
             walls: walls,
+            rockWalls: rockWalls,
             doors: doors,
             spawnPoints: [playerSpawn],
-            entities: entities
+            entities: entities,
+            startingDoorId: townDetails.length > 0 ? townDetails[0].id : undefined
         });
 
         return world;
@@ -740,6 +860,99 @@ export class WorldGenerator {
             spawnPoints: [{ x: sx, y: sy }],
             entities
         });
+    }
+
+    private generateRockWalls(
+        walls: boolean[][],
+        cities: { x: number, y: number }[],
+        templeLocs: { x: number, y: number }[],
+        skyTempleIdx: number,
+        waypoints: { x: number, y: number }[] = []
+    ): boolean[][] {
+        const rockWalls: boolean[][] = Array(this.width).fill(null).map(() => Array(this.height).fill(false));
+
+        // Shape templates: relative [dx, dy] offsets for T and L shapes (4 tiles each)
+        const shapeTemplates: [number, number][][] = [
+            [[0,0],[1,0],[2,0],[1,1]],   // T down
+            [[0,0],[1,0],[2,0],[1,-1]],  // T up
+            [[0,0],[0,1],[0,2],[1,1]],   // T right
+            [[0,0],[0,1],[0,2],[-1,1]],  // T left
+            [[0,0],[0,1],[0,2],[1,2]],   // L
+            [[0,0],[0,1],[0,2],[-1,2]],  // J
+            [[0,0],[1,0],[0,1],[0,2]],   // L rotated
+            [[0,0],[1,0],[1,1],[1,2]],   // L mirror
+        ];
+
+        const placeShape = (cx: number, cy: number, intoWalls: boolean) => {
+            const shape = shapeTemplates[Math.floor(Math.random() * shapeTemplates.length)];
+            for (const [dx, dy] of shape) {
+                const tx = cx + dx, ty = cy + dy;
+                if (tx > 0 && tx < this.width - 1 && ty > 0 && ty < this.height - 1) {
+                    if (intoWalls) walls[tx][ty] = true;
+                    rockWalls[tx][ty] = true;
+                }
+            }
+        };
+
+        const distToNearest = (x: number, y: number, locs: { x: number, y: number }[]) =>
+            locs.reduce((min, l) => Math.min(min, Math.sqrt((l.x - x) ** 2 + (l.y - y) ** 2)), Infinity);
+
+        // a) 10 small T/L clusters placed in existing wall tiles, ≥8 tiles from any clearing
+        const allClearings = [...cities, ...templeLocs];
+        let placed = 0;
+        let attempts = 0;
+        while (placed < 10 && attempts < 2000) {
+            attempts++;
+            const x = 2 + Math.floor(Math.random() * (this.width - 4));
+            const y = 2 + Math.floor(Math.random() * (this.height - 4));
+            if (walls[x][y] && distToNearest(x, y, allClearings) >= 8) {
+                placeShape(x, y, false); // tiles are already walls; just mark rockWalls
+                placed++;
+            }
+        }
+
+        // b) ~5 T/L formations in open (carved) path areas, far from any town/temple
+        placed = 0;
+        attempts = 0;
+        while (placed < 5 && attempts < 2000) {
+            attempts++;
+            const x = 2 + Math.floor(Math.random() * (this.width - 4));
+            const y = 2 + Math.floor(Math.random() * (this.height - 4));
+            const distToCities = distToNearest(x, y, cities);
+            const distToTemples = distToNearest(x, y, templeLocs);
+            if (!walls[x][y] && distToCities >= 15 && distToTemples >= 9) {
+                placeShape(x, y, true); // re-block these tiles as rock walls
+                placed++;
+            }
+        }
+
+        // c) Large rock clusters in the 3 waypoint clearings
+        for (const wp of waypoints) {
+            const shapeCount = 3 + Math.floor(Math.random() * 3); // 3–5 shapes per clearing
+            for (let i = 0; i < shapeCount; i++) {
+                const ox = Math.floor(Math.random() * 9) - 4; // offset –4 to +4
+                const oy = Math.floor(Math.random() * 9) - 4;
+                placeShape(wp.x + ox, wp.y + oy, true);
+            }
+        }
+
+        // d) Sky temple rock wall ring (radius 10–15), blocks path forcing bomb use
+        if (skyTempleIdx < templeLocs.length) {
+            const st = templeLocs[skyTempleIdx];
+            const ringRadius = 10 + Math.floor(Math.random() * 6); // 10–15
+            for (let x = st.x - (ringRadius + 3); x <= st.x + (ringRadius + 3); x++) {
+                for (let y = st.y - (ringRadius + 3); y <= st.y + (ringRadius + 3); y++) {
+                    if (x <= 0 || x >= this.width - 1 || y <= 0 || y >= this.height - 1) continue;
+                    const dist = Math.sqrt((st.x - x) ** 2 + (st.y - y) ** 2);
+                    if (dist >= ringRadius && dist <= ringRadius + 2) {
+                        walls[x][y] = true;
+                        rockWalls[x][y] = true;
+                    }
+                }
+            }
+        }
+
+        return rockWalls;
     }
 
     private carveCircle(walls: boolean[][], x: number, y: number, radius: number) {

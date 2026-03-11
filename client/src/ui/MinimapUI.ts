@@ -1,5 +1,6 @@
 
 import type { GameTask, Person } from '../../../shared/src/data/GameData';
+import { TEMPLE_ENEMY_TYPES } from '../../../shared/src/data/GameData';
 
 export class MinimapUI {
     private canvas: HTMLCanvasElement;
@@ -40,7 +41,9 @@ export class MinimapUI {
         walls: boolean[][] | null = null,
         chestPos: { x: number; y: number } | null = null,
         isTemple: boolean = false,
-        playerAngle: number = 0
+        playerAngle: number = 0,
+        suspectedPeople?: Set<string>,
+        housePeople?: { [doorId: string]: string }
     ) {
         // Clear
         this.ctx.clearRect(0, 0, this.size, this.size);
@@ -89,7 +92,26 @@ export class MinimapUI {
             this.ctx.fill();
         });
 
-        // 2. Draw Focused Town (Purple Dot) — drawn before yellow so quest marker appears on top
+        // 2b. Draw suspected house doors (orange ring + dot) — only visible inside towns
+        if (suspectedPeople && housePeople) {
+            doors.forEach(door => {
+                if (door.type !== 'house') return;
+                const personId = housePeople[door.id];
+                if (!personId || !suspectedPeople.has(personId)) return;
+                const p = toMap(door.x, door.y);
+                this.ctx.strokeStyle = '#ff8800';
+                this.ctx.lineWidth = 2;
+                this.ctx.beginPath();
+                this.ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
+                this.ctx.stroke();
+                this.ctx.fillStyle = '#ff8800';
+                this.ctx.beginPath();
+                this.ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
+                this.ctx.fill();
+            });
+        }
+
+        // 3. Draw Focused Town (Purple Dot) — drawn before yellow so quest marker appears on top
         if (focusedTownId) {
             const focusedDoor = doors.find(d => d.type !== 'house' && (d.target === focusedTownId || d.id === focusedTownId));
             if (focusedDoor) {
@@ -194,7 +216,6 @@ export class MinimapUI {
 
         // 4. Draw Temple Enemies (Red Dots)
         if (isTemple) {
-            const TEMPLE_ENEMY_TYPES = ['bee', 'man_eater_flower', 'arachne', 'eyeball', 'fire_skull'];
             this.ctx.fillStyle = '#FF2222';
             entities.forEach(e => {
                 if (!TEMPLE_ENEMY_TYPES.includes(e.data?.type)) return;
@@ -231,5 +252,11 @@ export class MinimapUI {
 
     public toggle(visible: boolean) {
         this.canvas.style.display = visible ? 'block' : 'none';
+    }
+
+    public repositionForMobile() {
+        this.canvas.style.right = '';
+        this.canvas.style.left = '50%';
+        this.canvas.style.transform = 'translateX(-50%)';
     }
 }

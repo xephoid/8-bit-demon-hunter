@@ -87,7 +87,7 @@ export class StartScreenUI {
         });
 
         const subtitle = document.createElement('div');
-        subtitle.textContent = 'A Detective RPG';
+        subtitle.textContent = 'A Procedurally Generated Detective RPG';
         Object.assign(subtitle.style, {
             fontSize: '12px',
             color: '#aaa',

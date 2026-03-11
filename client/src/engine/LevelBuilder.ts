@@ -7,8 +7,11 @@ interface WorldData {
     type: 'world' | 'city' | 'arena' | 'temple';
     customId?: string;
     walls: boolean[][];
+    rockWalls?: boolean[][];
     entities: any[];
     doors: any[];
+    housePeople?: { [doorId: string]: string }; // doorId -> personId
+    innRect?: { x: number, y: number, w: number, h: number }; // Inn building tile bounds
 }
 
 export class LevelBuilder {
@@ -16,6 +19,7 @@ export class LevelBuilder {
     private assetManager: AssetManager;
     private tileSize: number = 2; // 3D units
     private meshes: THREE.Object3D[] = [];
+    public signSprites: { sprite: THREE.Sprite, personId: string }[] = [];
 
     constructor(scene: THREE.Scene, assetManager: AssetManager) {
         this.scene = scene;
@@ -78,27 +82,71 @@ export class LevelBuilder {
             }
         });
 
-        // Walls
+        // Walls — split into regular walls and rock walls
         const wallGeometry = new THREE.BoxGeometry(this.tileSize, this.tileSize * 2, this.tileSize);
         const wallMaterial = new THREE.MeshBasicMaterial({ map: this.assetManager.getTexture('wall_stone') });
-        let wallCount = 0;
-        data.walls.forEach(col => col.forEach(w => { if (w) wallCount++; }));
+        const halfGeometry = new THREE.BoxGeometry(this.tileSize, this.tileSize, this.tileSize);
+        const rockBottomMaterial = new THREE.MeshBasicMaterial({ map: this.assetManager.getTexture('rock_wall_bottom') });
+        const rockTopMaterial = new THREE.MeshBasicMaterial({ map: this.assetManager.getTexture('rock_wall_top') });
 
-        const instancedMesh = new THREE.InstancedMesh(wallGeometry, wallMaterial, wallCount);
-        const dummy = new THREE.Object3D();
-        let index = 0;
+        let regularWallCount = 0;
+        let rockWallCount = 0;
         for (let x = 0; x < data.width; x++) {
             for (let y = 0; y < data.height; y++) {
                 if (data.walls[x][y]) {
-                    dummy.position.set((x * this.tileSize) + (this.tileSize / 2), this.tileSize, (y * this.tileSize) + (this.tileSize / 2));
-                    dummy.updateMatrix();
-                    instancedMesh.setMatrixAt(index++, dummy.matrix);
+                    if (data.rockWalls?.[x][y]) rockWallCount++;
+                    else regularWallCount++;
                 }
             }
         }
-        instancedMesh.instanceMatrix.needsUpdate = true;
-        this.scene.add(instancedMesh);
-        this.meshes.push(instancedMesh);
+
+        const dummy = new THREE.Object3D();
+
+        // Regular (forest) walls
+        if (regularWallCount > 0) {
+            const instancedMesh = new THREE.InstancedMesh(wallGeometry, wallMaterial, regularWallCount);
+            let index = 0;
+            for (let x = 0; x < data.width; x++) {
+                for (let y = 0; y < data.height; y++) {
+                    if (data.walls[x][y] && !data.rockWalls?.[x][y]) {
+                        dummy.position.set((x * this.tileSize) + (this.tileSize / 2), this.tileSize, (y * this.tileSize) + (this.tileSize / 2));
+                        dummy.updateMatrix();
+                        instancedMesh.setMatrixAt(index++, dummy.matrix);
+                    }
+                }
+            }
+            instancedMesh.instanceMatrix.needsUpdate = true;
+            this.scene.add(instancedMesh);
+            this.meshes.push(instancedMesh);
+        }
+
+        // Rock walls — two stacked half-height boxes (bottom + top cap)
+        if (rockWallCount > 0) {
+            const rockBottomMesh = new THREE.InstancedMesh(halfGeometry, rockBottomMaterial, rockWallCount);
+            const rockTopMesh = new THREE.InstancedMesh(halfGeometry, rockTopMaterial, rockWallCount);
+            let index = 0;
+            for (let x = 0; x < data.width; x++) {
+                for (let y = 0; y < data.height; y++) {
+                    if (data.rockWalls?.[x][y]) {
+                        const wx = (x * this.tileSize) + (this.tileSize / 2);
+                        const wy = (y * this.tileSize) + (this.tileSize / 2);
+                        dummy.position.set(wx, this.tileSize / 2, wy);
+                        dummy.updateMatrix();
+                        rockBottomMesh.setMatrixAt(index, dummy.matrix);
+                        dummy.position.set(wx, this.tileSize / 2 + this.tileSize, wy);
+                        dummy.updateMatrix();
+                        rockTopMesh.setMatrixAt(index, dummy.matrix);
+                        index++;
+                    }
+                }
+            }
+            rockBottomMesh.instanceMatrix.needsUpdate = true;
+            rockTopMesh.instanceMatrix.needsUpdate = true;
+            this.scene.add(rockBottomMesh);
+            this.scene.add(rockTopMesh);
+            this.meshes.push(rockBottomMesh);
+            this.meshes.push(rockTopMesh);
+        }
 
         // Doors (Generic)
         this.buildDoors(data.doors);
@@ -147,9 +195,21 @@ export class LevelBuilder {
             return data.doors?.some(d => d.type === 'house' && d.x === x && d.y === y);
         };
 
+        // Helper for Inn Door check (renders as door_closed visually)
+        const isInnDoor = (x: number, y: number) => {
+            return data.doors?.some(d => d.type === 'inn' && d.x === x && d.y === y);
+        };
+
         // Helper for Exit Door check
         const isExitDoor = (x: number, y: number) => {
             return data.doors?.some(d => d.type === 'exit' && d.x === x && d.y === y);
+        };
+
+        // Helper: is this the one "Inn sign" tile (1 tile left of the inn door)?
+        const innDoor = data.doors?.find((d: any) => d.type === 'inn');
+        const isInnSign = (x: number, y: number) => {
+            if (!innDoor) return false;
+            return x === innDoor.x - 1 && y === innDoor.y;
         };
 
         for (let x = 0; x < data.width; x++) {
@@ -182,17 +242,18 @@ export class LevelBuilder {
                         dummy.updateMatrix();
                         addToBatch('town_log_wall_top', dummy.matrix.clone());
                     } else {
-                        // House Wall (Internal) - ALL SIDES WRAP AROUND
+                        // House Wall (Internal) — or Inn wall
 
                         // --- BOTTOM BLOCK ---
                         dummy.position.set((x * this.tileSize) + (this.tileSize / 2), this.tileSize / 2, (y * this.tileSize) + (this.tileSize / 2));
                         dummy.updateMatrix();
 
-                        if (isHouseDoor(x, y)) {
+                        if (isHouseDoor(x, y) || isInnDoor(x, y)) {
                             addToBatch('town_door_closed', dummy.matrix.clone());
+                        } else if (isInnSign(x, y)) {
+                            addToBatch('inn_wall', dummy.matrix.clone());
                         } else {
                             // L/M/R Tiling logic for ALL SIDES
-                            // Check Wall Neighbors
                             const left = !isWall(x - 1, y);
                             const right = !isWall(x + 1, y);
 
@@ -250,6 +311,30 @@ export class LevelBuilder {
 
         // 3. Doors
         this.buildDoors(data.doors);
+
+        // 4. House Signs — one sign sprite just south of each house door
+        if (data.housePeople) {
+            const signTexture = this.assetManager.getTexture('sign');
+            if (signTexture) {
+                for (const [doorId, personId] of Object.entries(data.housePeople)) {
+                    const door = data.doors?.find((d: any) => d.id === doorId);
+                    if (!door) continue;
+                    const signMat = new THREE.SpriteMaterial({ map: signTexture, transparent: true });
+                    const sign = new THREE.Sprite(signMat);
+                    // Place 1 tile south and 1 tile left of the house door
+                    sign.position.set(
+                        ((door.x - 1) * this.tileSize) + (this.tileSize / 2),
+                        this.tileSize / 2,
+                        ((door.y + 1) * this.tileSize) + (this.tileSize / 2)
+                    );
+                    sign.scale.set(this.tileSize * 0.6, this.tileSize * 0.6, 1);
+                    sign.userData = { type: 'sign', personId };
+                    this.scene.add(sign);
+                    this.meshes.push(sign);
+                    this.signSprites.push({ sprite: sign, personId });
+                }
+            }
+        }
     }
 
     private buildDoors(doors: any[]) {
@@ -261,6 +346,7 @@ export class LevelBuilder {
             // Determine Texture based on Type
             let texKey = 'door';
             if (door.type === 'exit') texKey = 'town_door_open';
+            else if (door.type === 'inn') texKey = 'town_door_open'; // Inn door is visually open
             else if (door.type === 'temple') texKey = 'temple_entrance';
             else if (door.type === 'temple_exit') {
                 // Per-temple door texture: derive type from exit door id ("exit_temple_sky" → "sky")
@@ -428,9 +514,9 @@ export class LevelBuilder {
     public clear() {
         this.meshes.forEach(mesh => {
             this.scene.remove(mesh);
-            // Optional: Dispose geometries/materials if needed for memory
         });
         this.meshes = [];
+        this.signSprites = [];
     }
 
     private createNameLabel(text: string): THREE.Sprite {

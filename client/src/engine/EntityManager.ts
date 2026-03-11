@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { AssetManager } from './AssetManager';
+import { TEMPLE_ENEMY_TYPES } from '../../../shared/src/data/GameData';
 
 export interface EntityData {
     type: string;
@@ -39,6 +40,8 @@ export class EntityManager {
     public onDemonDying: (() => void) | null = null;
     /** World position of the arena centre — set by main.ts when building the arena. */
     public arenaCenter: { x: number; z: number } = { x: 31, z: 31 };
+    /** Called when any non-demon entity is killed (plants, trees, enemies). Receives type, tile x, tile z. */
+    public onEntityKilled: ((type: string, x: number, z: number) => void) | null = null;
 
     // Grid System
     private tileSize = 2; // Matches map scale
@@ -176,6 +179,8 @@ export class EntityManager {
                     }
                 }
             }
+        } else if (data.type === 'plant' || data.type === 'tree') {
+            texture = this.assetManager.getTexture(data.type);
         } else if (data.type === 'chest_temple') {
             const templeType = data.properties?.templeType ?? '';
             texture = this.assetManager.getTexture(`chest_temple_${templeType}_closed`)
@@ -192,10 +197,10 @@ export class EntityManager {
                 1,
                 (data.y * this.tileSize) + (this.tileSize / 2)
             );
-            const TEMPLE_ENEMY_TYPES = ['bee', 'man_eater_flower', 'arachne', 'eyeball', 'fire_skull'];
             const spriteScale = data.type === 'demon' ? 5.0
                 : TEMPLE_ENEMY_TYPES.includes(data.type) ? 3.0
                 : data.type === 'chest_temple' ? 2.0
+                : data.type === 'tree' ? 2.0
                 : 1.5;
             sprite.scale.set(spriteScale, spriteScale, 1);
 
@@ -430,6 +435,7 @@ export class EntityManager {
         if (typeof entity.data.properties.hp !== 'number') entity.data.properties.hp = 10;
 
         entity.data.properties.hp -= damage;
+        entity.data.properties.attacked = true;
         this.onEntityHit?.(entity.data.type);
 
         entity.sprite.material.color.setHex(0xff0000);
@@ -437,25 +443,27 @@ export class EntityManager {
             if (entity.sprite) entity.sprite.material.color.setHex(0xffffff);
         }, 100);
 
-        knockDir.y = 0;
-        if (knockDir.lengthSq() > 0) knockDir.normalize();
-        const shove = knockDir.clone().multiplyScalar(1.5);
+        if (entity.data.type !== 'plant' && entity.data.type !== 'tree') {
+            knockDir.y = 0;
+            if (knockDir.lengthSq() > 0) knockDir.normalize();
+            const shove = knockDir.clone().multiplyScalar(1.5);
 
-        // Simple collision check for shove
-        const targetPos = entity.sprite.position.clone().add(shove);
-        const gx = Math.floor(targetPos.x / 2);
-        const gy = Math.floor(targetPos.z / 2);
+            // Simple collision check for shove
+            const targetPos = entity.sprite.position.clone().add(shove);
+            const gx = Math.floor(targetPos.x / 2);
+            const gy = Math.floor(targetPos.z / 2);
 
-        if (this.currentWalls) {
-            if (gx >= 0 && gx < this.currentWalls.length && gy >= 0 && gy < this.currentWalls[0].length && !this.currentWalls[gx][gy]) {
+            if (this.currentWalls) {
+                if (gx >= 0 && gx < this.currentWalls.length && gy >= 0 && gy < this.currentWalls[0].length && !this.currentWalls[gx][gy]) {
+                    entity.sprite.position.add(shove);
+                }
+            } else {
                 entity.sprite.position.add(shove);
             }
-        } else {
-            entity.sprite.position.add(shove);
-        }
 
-        entity.data.x = Math.floor(entity.sprite.position.x / 2);
-        entity.data.y = Math.floor(entity.sprite.position.z / 2);
+            entity.data.x = Math.floor(entity.sprite.position.x / 2);
+            entity.data.y = Math.floor(entity.sprite.position.z / 2);
+        }
 
         console.log(`Hit ${entity.data.type}! HP: ${entity.data.properties.hp}`);
 
@@ -469,6 +477,7 @@ export class EntityManager {
                     this.onDemonDying?.(); // fire immediately so sound plays at animation start
                 }
             } else {
+                this.onEntityKilled?.(entity.data.type, entity.data.x, entity.data.y);
                 this.scene.remove(entity.sprite);
                 this.activeEntities.splice(index, 1);
                 const event = new CustomEvent('entityKilled', { detail: entity.data });
@@ -627,6 +636,7 @@ export class EntityManager {
 
         this.activeEntities.forEach(entity => {
             if (entity.data.properties.isDying) return; // handled by death animation pass
+            if (entity.data.type === 'plant' || entity.data.type === 'tree') return; // stationary harvestables
             const startPos = entity.sprite.position.clone();
             entity.anim.isMoving = false;
             const enemyTemplate = this.gameConfig?.enemies?.find((e: any) => e.id === entity.data.type);
@@ -1224,6 +1234,14 @@ export class EntityManager {
 
     public getEntityByPersonId(personId: string): any | null {
         return this.activeEntities.find(e => e.data.properties && e.data.properties.personId === personId);
+    }
+
+    public removeEntityByName(name: string): void {
+        const idx = this.activeEntities.findIndex(e => e.data.name === name);
+        if (idx !== -1) {
+            this.scene.remove(this.activeEntities[idx].sprite);
+            this.activeEntities.splice(idx, 1);
+        }
     }
 
     public checkForInteraction(playerPos: THREE.Vector3): EntityData | null {

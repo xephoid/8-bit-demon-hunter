@@ -13,13 +13,21 @@ export class Controls {
     private camera: THREE.Camera;
     private worldData: any = null;
     private tileSize: number = 2;
+    public isFlying: boolean = false;
+    public autoLock: boolean = true;
+    public isMobile: boolean = false;
+    public mobileActive: boolean = false;
+
+    get isActive(): boolean {
+        return this.isMobile ? this.mobileActive : this.controls.isLocked;
+    }
 
     constructor(camera: THREE.Camera, domElement: HTMLElement) {
         this.camera = camera;
         this.controls = new PointerLockControls(camera, domElement);
 
         domElement.addEventListener('click', () => {
-            this.controls.lock();
+            if (this.autoLock && !this.isMobile) this.controls.lock();
         });
 
         const onKeyDown = (event: KeyboardEvent) => {
@@ -80,7 +88,7 @@ export class Controls {
     }
 
     public update(delta: number, agility: number = 1) {
-        if (this.controls.isLocked === true) {
+        if (this.isMobile ? this.mobileActive : this.controls.isLocked) {
             this.velocity.x -= this.velocity.x * 10.0 * delta;
             this.velocity.z -= this.velocity.z * 10.0 * delta;
 
@@ -92,7 +100,8 @@ export class Controls {
             const maxAgility = 5;
             const baseAcc = 150.0;
             const scalingAcc = 50.0; // 150 + (50 * 5) = 400 at max level
-            const currentAcc = baseAcc + (scalingAcc * Math.min(agility, maxAgility));
+            const mobileMult = this.isMobile ? 0.65 : 1.0;
+            const currentAcc = (baseAcc + (scalingAcc * Math.min(agility, maxAgility))) * mobileMult;
 
             // Acceleration
             if (this.moveForward || this.moveBackward) this.velocity.z -= this.direction.z * currentAcc * delta;
@@ -165,6 +174,10 @@ export class Controls {
 
             // Array is walls[x][y]
             if (this.worldData.walls[gridX][gridY]) {
+                // Allow passage when flying over a rock wall
+                if (this.isFlying && this.worldData.rockWalls?.[gridX]?.[gridY]) {
+                    continue;
+                }
                 return true; // Hit wall
             }
         }
@@ -172,7 +185,7 @@ export class Controls {
         return false;
     }
 
-    private checkInteraction() {
+    public checkInteraction() {
         // Use stored camera position
         const event = new CustomEvent('playerInteract', {
             detail: { position: this.camera.position }
@@ -186,11 +199,20 @@ export class Controls {
         this.controls.pointerSpeed = value;
     }
 
+    public setMobileMovement(forward: boolean, backward: boolean, left: boolean, right: boolean) {
+        this.moveForward = forward;
+        this.moveBackward = backward;
+        this.moveLeft = left;
+        this.moveRight = right;
+    }
+
     public lock() {
+        if (this.isMobile) { this.mobileActive = true; return; }
         this.controls.lock();
     }
 
     public unlock() {
+        if (this.isMobile) { this.mobileActive = false; return; }
         this.controls.unlock();
     }
 

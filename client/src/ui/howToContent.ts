@@ -36,11 +36,9 @@ export const HOW_TO_HTML = `
 <div style="color:#FFD700;font-size:13px;margin-bottom:8px;">ACCUSATION</div>
 <div style="margin-bottom:24px;">Open the Clue Book (C), find the demon, and click ACCUSE.<br>If you&#x2019;re right &#x2014; you reach the finale. If you&#x2019;re wrong &#x2014; game over.</div>
 
-<div style="color:#FFD700;font-size:13px;margin-bottom:8px;">BEGINNER TIPS</div>
-<div style="margin-bottom:6px;">&#x2022; Find a town first!</div>
-<div style="margin-bottom:6px;">&#x2022; You can find the demon without combat, but leveling is important for the temples and the finale.</div>
-<div style="margin-bottom:6px;">&#x2022; When you die leveling resets.</div>
-<div style="margin-bottom:6px;">&#x2022; Entering a town heals you to full health.</div>
-<div style="margin-bottom:6px;">&#x2022; Watch the mushrooms!</div>
+<div style="color:#FFD700;font-size:13px;margin-bottom:8px;">CREDITS</div>
+<div style="margin-bottom:6px;">Created by Zeke Swepson</div>
+<div style="margin-bottom:6px;">Much code written by Claude Code</div>
+<div style="margin-bottom:6px;">Open source sound and art downloaded from OpenGameArt.org</div>
 
 `.trim();

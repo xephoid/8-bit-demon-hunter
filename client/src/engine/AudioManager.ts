@@ -62,13 +62,13 @@ export class AudioManager {
         this.musicEl.play().catch(() => { });
     }
 
-    public setMusicVolume(v: number) { this.musicEl.volume = v; }
-    public setSfxVolume(v: number) { this.sfxGain.gain.value = v; }
+    public setMusicVolume(v: number) { this.musicEl.volume = 0.4 * v; }
+    public setSfxVolume(v: number) { this.sfxGain.gain.value = 0.7 * v; }
 
     /** Scale both music and SFX together. v is 0–1. */
     public setMasterVolume(v: number) {
-        this.musicEl.volume = 0.4 * v;
-        this.sfxGain.gain.value = 0.7 * v;
+        this.setMusicVolume(v);
+        this.setSfxVolume(v);
     }
 
     public pauseMusic() { this.musicEl.pause(); }
@@ -109,4 +109,9 @@ export const ALL_SFX: string[] = [
     '/sounds/temple_cleared.wav',
     '/sounds/open_chest.wav',
     '/sounds/task_complete.wav',
+    '/sounds/bomb_blast.wav',
+    '/sounds/minion-cackle.ogg',
+    '/sounds/binding_found.wav',
+    '/sounds/player_rest.wav',
+    '/sounds/player_train.wav',
 ];

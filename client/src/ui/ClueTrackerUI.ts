@@ -12,6 +12,12 @@ export class ClueTrackerUI {
     public onDemonAccused: (() => void) | null = null;
     /** Called with the accusation result (won=true for correct, false for wrong) and the accused person's id. */
     public onAccuseResult: ((won: boolean, personId: string) => void) | null = null;
+    /** Called whenever the suspect list is toggled so external systems (e.g. minimap) can react. */
+    public onSuspectToggled: (() => void) | null = null;
+
+    private _suspectedPeople: Set<string> = new Set();
+    private _maxSuspects: number = 10;
+    private _demonBindings: string[] = [];
 
     constructor(assetManager: AssetManager) {
         this.assetManager = assetManager;
@@ -48,15 +54,18 @@ export class ClueTrackerUI {
         this.container.appendChild(this.contentEl);
     }
 
-    public toggle(people: Person[], knownClues: Clue[], items: any[], towns: any[], activeTask: GameTask | null, onSelectTask: (task: GameTask) => void) {
+    public toggle(people: Person[], knownClues: Clue[], items: any[], towns: any[], activeTask: GameTask | null, onSelectTask: (task: GameTask) => void, demonBindings: string[] = [], suspectedPeople: Set<string> = new Set(), maxSuspects: number = 10) {
         if (this.isOpen) {
             this.hide();
         } else {
-            this.show(people, knownClues, items, towns, activeTask, onSelectTask);
+            this.show(people, knownClues, items, towns, activeTask, onSelectTask, undefined, demonBindings, suspectedPeople, maxSuspects);
         }
     }
 
-    public show(people: Person[], knownClues: Clue[], items: any[], towns: any[], activeTask: GameTask | null, onSelectTask: (task: GameTask) => void, currentWorldId?: string) {
+    public show(people: Person[], knownClues: Clue[], items: any[], towns: any[], activeTask: GameTask | null, onSelectTask: (task: GameTask) => void, currentWorldId?: string, demonBindings: string[] = [], suspectedPeople: Set<string> = new Set(), maxSuspects: number = 10) {
+        this._suspectedPeople = suspectedPeople;
+        this._maxSuspects = maxSuspects;
+        this._demonBindings = demonBindings;
         this.container.style.display = 'flex';
         this.isOpen = true;
         // Auto-switch to the player's current town tab if they're inside a town
@@ -65,7 +74,7 @@ export class ClueTrackerUI {
             const discoveredTownIds = Array.from(new Set(metPeople.map(p => p.attributes.townId)));
             if (discoveredTownIds.includes(currentWorldId)) this.currentTab = currentWorldId;
         }
-        this.render(people, knownClues, items, towns, activeTask, onSelectTask);
+        this.render(people, knownClues, items, towns, activeTask, onSelectTask, demonBindings);
     }
 
     public hide() {
@@ -76,11 +85,16 @@ export class ClueTrackerUI {
     public currentTab: string | null = null;
     public currentSort: 'occupation' | 'pet' | 'color' | 'item' = 'occupation';
 
-    private render(people: Person[], knownClues: Clue[], items: any[], towns: any[], activeTask: GameTask | null, onSelectTask: (task: GameTask) => void) {
+    private render(people: Person[], knownClues: Clue[], items: any[], towns: any[], activeTask: GameTask | null, onSelectTask: (task: GameTask) => void, demonBindings: string[] = []) {
         this.contentEl.innerHTML = '';
 
-        // 1. Known Clues Section
+        // 1. Top row: Collected Clues + Demon Bindings side by side
+        const topRow = document.createElement('div');
+        Object.assign(topRow.style, { display: 'flex', gap: '30px', alignItems: 'flex-start' });
+
+        // 1a. Known Clues Section
         const clueSection = document.createElement('div');
+        clueSection.style.flex = '1';
         clueSection.innerHTML = '<h3 style="border-bottom: 1px solid #666; padding-bottom: 5px;">COLLECTED CLUES</h3>';
 
         const displayedClues = knownClues.filter(c => c.isGood || c.isSpecial);
@@ -100,12 +114,46 @@ export class ClueTrackerUI {
             });
             clueSection.appendChild(ul);
         }
-        this.contentEl.appendChild(clueSection);
+        topRow.appendChild(clueSection);
+
+        // 1b. Demon Bindings Section
+        const bindingsSection = document.createElement('div');
+        bindingsSection.style.minWidth = '220px';
+        bindingsSection.innerHTML = '<h3 style="border-bottom: 1px solid #660099; padding-bottom: 5px; color: #aa44ff;">DEMON BINDINGS</h3>';
+        if (demonBindings.length === 0) {
+            bindingsSection.innerHTML += '<p style="color: #888; font-size: 0.8em;">None found yet.</p>';
+        } else {
+            const ul = document.createElement('ul');
+            ul.style.paddingLeft = '20px';
+            for (const name of demonBindings) {
+                const li = document.createElement('li');
+                li.innerText = name;
+                li.style.marginBottom = '8px';
+                li.style.fontSize = '0.8em';
+                li.style.color = '#aa44ff';
+                ul.appendChild(li);
+            }
+            bindingsSection.appendChild(ul);
+        }
+        topRow.appendChild(bindingsSection);
+
+        this.contentEl.appendChild(topRow);
+
+        // Suspect count label (rendered after PEOPLE MET heading)
+        const countLabel = document.createElement('div');
+        Object.assign(countLabel.style, {
+            textAlign: 'right',
+            fontSize: '0.7em',
+            color: '#ff8800',
+            marginBottom: '10px'
+        });
+        countLabel.innerText = `Suspects: ${this._suspectedPeople.size} / ${this._maxSuspects}`;
 
         // 2. People Dossier
         const peopleSection = document.createElement('div');
         peopleSection.style.marginTop = '20px';
         peopleSection.innerHTML = '<h3 style="border-bottom: 1px solid #666; padding-bottom: 5px;">PEOPLE MET</h3>';
+        peopleSection.appendChild(countLabel);
 
         const metPeople = people.filter(p => p.hasMet);
 
@@ -155,7 +203,7 @@ export class ClueTrackerUI {
 
                 btn.onclick = () => {
                     this.currentTab = tId;
-                    this.render(people, knownClues, items, towns, activeTask, onSelectTask);
+                    this.render(people, knownClues, items, towns, activeTask, onSelectTask, this._demonBindings);
                 };
 
                 tabBar.appendChild(btn);
@@ -204,7 +252,7 @@ export class ClueTrackerUI {
 
             sortSelect.onchange = () => {
                 this.currentSort = sortSelect.value as ClueTrackerUI['currentSort'];
-                this.render(people, knownClues, items, towns, activeTask, onSelectTask);
+                this.render(people, knownClues, items, towns, activeTask, onSelectTask, this._demonBindings);
             };
 
             sortWrap.appendChild(sortSelect);
@@ -256,9 +304,13 @@ export class ClueTrackerUI {
         if (displayedPeople.length === 0 && unknownCount === 0) {
             peopleSection.innerHTML += '<p style="color: #888; font-size: 0.8em;">You haven\'t met anyone yet.</p>';
         } else {
+            const allSuspectBtns = new Map<string, HTMLButtonElement>();
+
             displayedPeople.forEach(p => {
+                const isSuspected = this._suspectedPeople.has(p.id);
                 const card = document.createElement('div');
-                card.style.border = '1px solid #444';
+                card.style.border = isSuspected ? '2px solid #ff8800' : '1px solid #444';
+                card.style.backgroundColor = isSuspected ? 'rgba(255, 136, 0, 0.07)' : '';
                 card.style.padding = '10px';
                 card.style.marginBottom = '10px';
                 card.style.fontSize = '0.8em';
@@ -412,6 +464,51 @@ export class ClueTrackerUI {
                     });
                 };
                 clueCol.appendChild(accuseBtn);
+
+                // SUSPECT BUTTON
+                const suspectBtn = document.createElement('button');
+                const atCap = this._suspectedPeople.size >= this._maxSuspects;
+                const suspectDisabled = atCap && !isSuspected;
+                suspectBtn.innerText = isSuspected ? '✓ SUSPECT' : 'SUSPECT';
+                suspectBtn.disabled = suspectDisabled;
+                Object.assign(suspectBtn.style, {
+                    backgroundColor: '#664400',
+                    color: '#ff8800',
+                    border: '1px solid #ff8800',
+                    padding: '5px 10px',
+                    fontFamily: 'inherit',
+                    fontSize: '0.7em',
+                    cursor: suspectDisabled ? 'default' : 'pointer',
+                    marginTop: '5px',
+                    alignSelf: 'flex-start',
+                    opacity: suspectDisabled ? '0.4' : '1'
+                });
+                suspectBtn.onclick = () => {
+                    if (this._suspectedPeople.has(p.id)) {
+                        this._suspectedPeople.delete(p.id);
+                        suspectBtn.innerText = 'SUSPECT';
+                        card.style.border = '1px solid #444';
+                        card.style.backgroundColor = '';
+                    } else {
+                        if (this._suspectedPeople.size >= this._maxSuspects) return;
+                        this._suspectedPeople.add(p.id);
+                        suspectBtn.innerText = '✓ SUSPECT';
+                        card.style.border = '2px solid #ff8800';
+                        card.style.backgroundColor = 'rgba(255, 136, 0, 0.07)';
+                    }
+                    countLabel.innerText = `Suspects: ${this._suspectedPeople.size} / ${this._maxSuspects}`;
+                    const nowAtCap = this._suspectedPeople.size >= this._maxSuspects;
+                    allSuspectBtns.forEach((btn, id) => {
+                        const btnIsSuspected = this._suspectedPeople.has(id);
+                        const shouldDisable = nowAtCap && !btnIsSuspected;
+                        btn.disabled = shouldDisable;
+                        btn.style.opacity = shouldDisable ? '0.4' : '1';
+                        btn.style.cursor = shouldDisable ? 'default' : 'pointer';
+                    });
+                    this.onSuspectToggled?.();
+                };
+                allSuspectBtns.set(p.id, suspectBtn);
+                clueCol.appendChild(suspectBtn);
 
                 card.appendChild(clueCol);
 

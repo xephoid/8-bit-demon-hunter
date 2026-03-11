@@ -7,7 +7,7 @@ export enum Occupation {
     Blacksmith = 'Blacksmith',
     Merchant = 'Merchant',
     Tailor = 'Tailor',
-    Baker = 'Baker',
+    Locksmith = 'Locksmith',
     Mayor = 'Mayor'
 }
 
@@ -94,6 +94,7 @@ export interface Person {
     task: GameTask;
     hasMet: boolean; // Player has talked to them
     taskCompleted: boolean;
+    tip?: string; // game tip (starting town) or lore (all other towns)
 }
 
 export interface Town {
@@ -105,6 +106,37 @@ export interface Town {
     height: number;
     people: Person[];
 }
+
+// Resource types — plain object to avoid erasableSyntaxOnly enum errors
+export const ResourceType = {
+    PlantFiber:  'plant_fiber',
+    Wood:        'wood',
+    DemonPowder: 'demon_powder',
+    DemonIchor:  'demon_ichor',
+    IronOre:     'iron_ore',
+    Gold:        'gold',
+} as const;
+export type ResourceType = typeof ResourceType[keyof typeof ResourceType];
+
+export const RESOURCE_BASE_VALUE: Record<string, number> = {
+    demon_powder: 1,
+    plant_fiber:  2,
+    wood:         3,
+    demon_ichor:  4,
+    iron_ore:     5,
+    gold:         6,
+};
+
+export const RESOURCE_DISPLAY_NAME: Record<string, string> = {
+    plant_fiber:  'Plant Fiber',
+    wood:         'Wood',
+    demon_powder: 'Demon Powder',
+    demon_ichor:  'Demon Ichor',
+    iron_ore:     'Iron Ore',
+    gold:         'Gold',
+};
+
+export const TEMPLE_ENEMY_TYPES: string[] = ['bee', 'man_eater_flower', 'arachne', 'eyeball', 'fire_skull'];
 
 export interface DemonHunterState {
     demonId: string;

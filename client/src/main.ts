@@ -5,16 +5,20 @@ import { AssetManager } from './engine/AssetManager';
 import { LevelBuilder } from './engine/LevelBuilder';
 import { EntityManager } from './engine/EntityManager';
 import { Controls } from './engine/Controls';
+import { MobileControls } from './engine/MobileControls';
 import { DialogueUI } from './ui/DialogueUI';
 import { ClueTrackerUI } from './ui/ClueTrackerUI';
 import { LevelUpUI } from './ui/LevelUpUI';
 import { MinimapUI } from './ui/MinimapUI';
 import type { GameTask, Person, Clue } from '../../shared/src/data/GameData';
+import { RESOURCE_BASE_VALUE, RESOURCE_DISPLAY_NAME, TEMPLE_ENEMY_TYPES } from '../../shared/src/data/GameData';
 import { Dialogue } from './data/dialogue';
 import { API_BASE, apiFetch } from './config/api';
 import { AudioManager, ENTITY_HIT_SOUNDS, ALL_SFX } from './engine/AudioManager';
 import { ModelManager } from './engine/ModelManager';
 import { StartScreenUI } from './ui/StartScreenUI';
+import { InnUI } from './ui/InnUI';
+import { BanditTradeUI } from './ui/BanditTradeUI';
 import { HOW_TO_HTML } from './ui/howToContent';
 import { trackEvent, flushEvents } from './analytics';
 
@@ -37,7 +41,16 @@ const playerState = {
   towns: [] as any[], // Global town registry
   visitedTownIds: [] as string[],
   canLevelUp: false,
-  templesCompleted: [] as string[]
+  templesCompleted: [] as string[],
+  hasLocksmithPower: false,
+  unlockedHouses: new Set<string>(),
+  demonBindings: [] as string[],
+  suspectedPeople: new Set<string>(),
+  shuckles: 5,
+  resources: { plant_fiber: 0, wood: 0, demon_powder: 0, demon_ichor: 0, iron_ore: 0, gold: 0 },
+  bombs: 0,
+  lockpicks: 0,
+  innStocks: {} as { [townId: string]: { [resource: string]: number } }
 };
 
 let gameConfig: any;
@@ -109,9 +122,30 @@ const init = async () => {
     else if (type === 'eye_lazer') audio.playSound('/sounds/eye_shoot.wav');
     else audio.playSound('/sounds/skeleton_shoot.wav');
   };
+  entityManager.onEntityKilled = (type, _x, _z) => {
+    const isTemple = currentWorldData?.type === 'temple';
+    let resource: string | null = null;
+    if (type === 'plant') resource = 'plant_fiber';
+    else if (type === 'tree') resource = 'wood';
+    else if (isTemple) resource = 'demon_ichor';
+    else if (!['dude', 'chick'].includes(type)) resource = 'demon_powder';
+    if (resource) {
+      (playerState.resources as Record<string, number>)[resource]++;
+      showResourcePickup(resource, (playerState.resources as Record<string, number>)[resource]);
+    }
+  };
 
   // 4. Setup Controls (Early Init)
   const controls = new Controls(renderer.camera, renderer.renderer.domElement);
+
+  // Mobile detection + setup
+  const isMobile = MobileControls.isMobileDevice();
+  let mobileControls: MobileControls | null = null;
+
+  if (isMobile) {
+    controls.isMobile = true;
+    controls.mobileActive = false;
+  }
 
   // Sensitivity slider
   const sensitivitySlider = document.getElementById('sensitivity-slider') as HTMLInputElement;
@@ -128,18 +162,32 @@ const init = async () => {
     localStorage.setItem('sensitivity', String(v));
   });
 
-  const volumeSlider = document.getElementById('volume-slider') as HTMLInputElement;
-  const volumeValue = document.getElementById('volume-value') as HTMLSpanElement;
-  const savedVolume = parseFloat(localStorage.getItem('volume') ?? '1.0');
-  volumeSlider.value = String(savedVolume);
-  volumeValue.textContent = savedVolume.toFixed(2);
-  audio.setMasterVolume(savedVolume);
-  volumeSlider.addEventListener('input', () => {
-    const v = parseFloat(volumeSlider.value);
-    volumeValue.textContent = v.toFixed(2);
-    audio.setMasterVolume(v);
-    localStorage.setItem('volume', String(v));
-    trackEvent('settings_changed', { setting: 'volume', value: v });
+  const musicVolumeSlider = document.getElementById('music-volume-slider') as HTMLInputElement;
+  const musicVolumeValue = document.getElementById('music-volume-value') as HTMLSpanElement;
+  const savedMusicVolume = parseFloat(localStorage.getItem('music-volume') ?? '1.0');
+  musicVolumeSlider.value = String(savedMusicVolume);
+  musicVolumeValue.textContent = savedMusicVolume.toFixed(1);
+  audio.setMusicVolume(savedMusicVolume);
+  musicVolumeSlider.addEventListener('input', () => {
+    const v = parseFloat(musicVolumeSlider.value);
+    musicVolumeValue.textContent = v.toFixed(1);
+    audio.setMusicVolume(v);
+    localStorage.setItem('music-volume', String(v));
+    trackEvent('settings_changed', { setting: 'music_volume', value: v });
+  });
+
+  const sfxVolumeSlider = document.getElementById('sfx-volume-slider') as HTMLInputElement;
+  const sfxVolumeValue = document.getElementById('sfx-volume-value') as HTMLSpanElement;
+  const savedSfxVolume = parseFloat(localStorage.getItem('sfx-volume') ?? '1.0');
+  sfxVolumeSlider.value = String(savedSfxVolume);
+  sfxVolumeValue.textContent = savedSfxVolume.toFixed(1);
+  audio.setSfxVolume(savedSfxVolume);
+  sfxVolumeSlider.addEventListener('input', () => {
+    const v = parseFloat(sfxVolumeSlider.value);
+    sfxVolumeValue.textContent = v.toFixed(1);
+    audio.setSfxVolume(v);
+    localStorage.setItem('sfx-volume', String(v));
+    trackEvent('settings_changed', { setting: 'sfx_volume', value: v });
   });
 
   // Pause screen: Settings / Stats / How To Play tabs
@@ -147,10 +195,12 @@ const init = async () => {
   const pauseBtnStats = document.getElementById('pause-btn-stats') as HTMLButtonElement;
   const pauseBtnHowto = document.getElementById('pause-btn-howto') as HTMLButtonElement;
   const pauseBtnItems = document.getElementById('pause-btn-items') as HTMLButtonElement;
+  const pauseBtnResources = document.getElementById('pause-btn-resources') as HTMLButtonElement;
   const pauseSettingsPanel = document.getElementById('pause-settings') as HTMLDivElement;
   const pauseStatsPanel = document.getElementById('pause-stats') as HTMLDivElement;
   const pauseHowtoPanel = document.getElementById('pause-howto') as HTMLDivElement;
   const pauseItemsPanel = document.getElementById('pause-items') as HTMLDivElement;
+  const pauseResourcesPanel = document.getElementById('pause-resources') as HTMLDivElement;
 
   pauseHowtoPanel.innerHTML = `<div style="overflow-y:auto;max-height:55vh;width:100%;background:#111;border:2px solid #444;padding:16px 22px;box-sizing:border-box;line-height:1.8;font-size:10px;color:#ddd;text-align:left;">${HOW_TO_HTML}</div>`;
 
@@ -193,23 +243,47 @@ const init = async () => {
     }).join('');
   };
 
-  const showPauseTab = (tab: 'settings' | 'stats' | 'howto' | 'items') => {
+  const updatePauseResources = () => {
+    const res = playerState.resources as Record<string, number>;
+    const resourceIconFile = (key: string) => key === 'gold' ? 'resource_gold_ore' : `resource_${key}`;
+    const rows = Object.entries(RESOURCE_DISPLAY_NAME).map(([key, name]) =>
+      `<div style="color:#aaa;display:flex;align-items:center;gap:4px;"><img src="/sprites/sliced/${resourceIconFile(key)}.png" style="width:14px;height:14px;image-rendering:pixelated;">${name}</div><div>${res[key] ?? 0}</div>`
+    ).join('');
+    pauseResourcesPanel.innerHTML = `
+<div style="background:#111;border:2px solid #444;padding:24px 32px;width:100%;box-sizing:border-box;font-size:11px;line-height:2.2;color:#ddd;">
+  <div style="color:#aaffaa;margin-bottom:4px;">SHUCKLES</div>
+  <div style="margin-bottom:16px;">\uD83D\uDC1A ${playerState.shuckles}</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 32px;">${rows}</div>
+  <div style="border-top:1px solid #444;margin-top:16px;padding-top:16px;display:grid;grid-template-columns:1fr 1fr;gap:8px 32px;">
+    <div style="color:#aaa;">Bombs</div><div>${playerState.bombs}</div>
+    <div style="color:#aaa;">Lockpicks</div><div>${playerState.lockpicks}</div>
+  </div>
+</div>`.trim();
+  };
+
+  let lastPauseTab: 'settings' | 'stats' | 'howto' | 'items' | 'resources' = 'settings';
+  const showPauseTab = (tab: 'settings' | 'stats' | 'howto' | 'items' | 'resources') => {
+    lastPauseTab = tab;
     pauseSettingsPanel.style.display = tab === 'settings' ? 'flex' : 'none';
     pauseStatsPanel.style.display = tab === 'stats' ? 'flex' : 'none';
     pauseHowtoPanel.style.display = tab === 'howto' ? 'flex' : 'none';
     pauseItemsPanel.style.display = tab === 'items' ? 'flex' : 'none';
+    pauseResourcesPanel.style.display = tab === 'resources' ? 'flex' : 'none';
     pauseBtnSettings.classList.toggle('active', tab === 'settings');
     pauseBtnStats.classList.toggle('active', tab === 'stats');
     pauseBtnHowto.classList.toggle('active', tab === 'howto');
     pauseBtnItems.classList.toggle('active', tab === 'items');
+    pauseBtnResources.classList.toggle('active', tab === 'resources');
     if (tab === 'stats') updatePauseStats();
     if (tab === 'items') updatePauseItems();
+    if (tab === 'resources') updatePauseResources();
   };
 
   pauseBtnSettings.addEventListener('click', () => showPauseTab('settings'));
   pauseBtnStats.addEventListener('click', () => showPauseTab('stats'));
   pauseBtnHowto.addEventListener('click', () => showPauseTab('howto'));
   pauseBtnItems.addEventListener('click', () => showPauseTab('items'));
+  pauseBtnResources.addEventListener('click', () => showPauseTab('resources'));
 
   const pauseBtnResume = document.getElementById('pause-btn-resume') as HTMLButtonElement;
   pauseBtnResume.addEventListener('click', () => {
@@ -233,8 +307,14 @@ const init = async () => {
   });
   document.body.appendChild(auraOverlay);
 
+  // Pending lockpick confirmation state
+  let pendingLockpickPersonId: string | null = null;
+
   // Fire Bombs (Fire)
-  let activeBomb: { mesh: THREE.Mesh; timer: number; wx: number; wz: number } | null = null;
+  let activeBomb: { sprite: THREE.Sprite; timer: number; wx: number; wz: number } | null = null;
+  let activeExplosion: { sprite: THREE.Sprite; frame: number; elapsed: number } | null = null;
+  const EXPLOSION_FRAMES = 12;
+  const EXPLOSION_FRAME_TIME = 0.07; // seconds per frame
 
   // Teleport Cape (Space) — built once, reused
   const teleportMenu = document.createElement('div');
@@ -354,6 +434,64 @@ const init = async () => {
   };
   powerPopup.addEventListener('click', hidePowerPopup);
 
+  // --- SIMPLE NOTIFICATION BANNER ---
+  const notifBanner = document.createElement('div');
+  Object.assign(notifBanner.style, {
+    position: 'fixed', top: '30%', left: '50%', transform: 'translateX(-50%)',
+    background: 'rgba(0,0,0,0.85)', border: '2px solid #ffd700', color: '#fff',
+    fontFamily: '"Press Start 2P", monospace', fontSize: '11px',
+    padding: '14px 24px', borderRadius: '4px', zIndex: '270',
+    display: 'none', pointerEvents: 'none', textAlign: 'center', maxWidth: '400px',
+    lineHeight: '1.8'
+  });
+  document.body.appendChild(notifBanner);
+  let notifTimer: ReturnType<typeof setTimeout> | null = null;
+  const showNotif = (text: string, durationMs: number = 2500) => {
+    notifBanner.innerText = text;
+    notifBanner.style.display = 'block';
+    if (notifTimer) clearTimeout(notifTimer);
+    notifTimer = setTimeout(() => { notifBanner.style.display = 'none'; }, durationMs);
+  };
+
+  // --- RESOURCE PICKUP HUD ---
+  const resourceNotifStack: HTMLElement[] = [];
+  const RESOURCE_DISPLAY_NAMES: Record<string, string> = {
+    ...RESOURCE_DISPLAY_NAME,
+    shuckles: 'Shuckles', bombs: 'Bombs', lockpicks: 'Lockpicks',
+  };
+  const showResourcePickup = (resourceKey: string, total: number) => {
+    // Trim stack to 2 before adding a 3rd
+    while (resourceNotifStack.length >= 3) {
+      const old = resourceNotifStack.shift();
+      old?.remove();
+    }
+    // Shift existing notifs up
+    resourceNotifStack.forEach((el, i) => {
+      el.style.bottom = `${80 + (resourceNotifStack.length - i) * 44}px`;
+    });
+    const el = document.createElement('div');
+    const name = RESOURCE_DISPLAY_NAMES[resourceKey] ?? resourceKey;
+    el.innerText = `+1 ${name}: ${total}`;
+    Object.assign(el.style, {
+      position: 'fixed', left: '16px',
+      bottom: `${80 + resourceNotifStack.length * 44}px`,
+      background: 'rgba(0,0,0,0.75)', border: '1px solid #888',
+      color: '#fff', fontFamily: '"Press Start 2P", monospace', fontSize: '11px',
+      padding: '8px 14px', borderRadius: '3px', zIndex: '260',
+      pointerEvents: 'none', transition: 'opacity 0.4s',
+    });
+    document.body.appendChild(el);
+    resourceNotifStack.push(el);
+    setTimeout(() => {
+      el.style.opacity = '0';
+      setTimeout(() => {
+        el.remove();
+        const idx = resourceNotifStack.indexOf(el);
+        if (idx !== -1) resourceNotifStack.splice(idx, 1);
+      }, 400);
+    }, 2100);
+  };
+
   // --- WORLD LOADING ---
   const loadWorld = async (worldData: any) => {
     currentWorldData = worldData;
@@ -373,7 +511,8 @@ const init = async () => {
     renderer.camera.position.y = 2;
     auraActive = false;
     auraOverlay.style.display = 'none';
-    if (activeBomb) { scene.remove(activeBomb.mesh); activeBomb = null; }
+    if (activeBomb) { scene.remove(activeBomb.sprite); activeBomb = null; }
+    if (activeExplosion) { scene.remove(activeExplosion.sprite); activeExplosion = null; }
     teleportMenu.style.display = 'none';
     powerPopupOpen = false;
     powerPopup.style.display = 'none';
@@ -436,7 +575,6 @@ const init = async () => {
 
     // If a temple spawned with no enemies (edge case from spawn filtering), reveal chest immediately
     if (worldData.type === 'temple') {
-      const TEMPLE_ENEMY_TYPES = ['bee', 'man_eater_flower', 'arachne', 'eyeball', 'fire_skull'];
       const hasEnemies = entityManager.activeEntities.some(e => TEMPLE_ENEMY_TYPES.includes(e.data.type));
       if (!hasEnemies) {
         worldCleared = true;
@@ -598,7 +736,8 @@ const init = async () => {
     overworldData = worldData; // Save for cheat teleport
     await loadWorld(worldData);
 
-    // Fetch Initial State (Items)
+    // Fetch Initial State (Items + Towns) BEFORE auto-entering the starting town
+    // so playerState.towns is populated when loadWorld looks up the town name.
     const stateRes = await apiFetch(`${API_BASE}/api/state`);
     const state = await stateRes.json();
     if (state.items) {
@@ -630,6 +769,17 @@ const init = async () => {
         }
       }
       await assetManager.loadAssets(charManifest);
+    }
+
+    // Auto-enter starting town (now that playerState.towns is populated for name lookup)
+    if (worldData.startingDoorId) {
+      try {
+        const townRes = await apiFetch(`${API_BASE}/api/enter/${worldData.startingDoorId}`, { method: 'POST' });
+        const townData = await townRes.json();
+        await loadWorld(townData);
+      } catch (e) {
+        console.warn("Failed to auto-enter starting town:", e);
+      }
     }
   } catch (e) {
     console.error("Failed to fetch world:", e);
@@ -673,9 +823,14 @@ const init = async () => {
     // Sync pause screen slider displays in case settings changed on start screen
     sensitivitySlider.value = localStorage.getItem('sensitivity') ?? '1.0';
     sensitivityValue.textContent = parseFloat(sensitivitySlider.value).toFixed(1);
-    volumeSlider.value = localStorage.getItem('volume') ?? '1.0';
-    volumeValue.textContent = parseFloat(volumeSlider.value).toFixed(2);
+    musicVolumeSlider.value = localStorage.getItem('music-volume') ?? '1.0';
+    musicVolumeValue.textContent = parseFloat(musicVolumeSlider.value).toFixed(1);
+    sfxVolumeSlider.value = localStorage.getItem('sfx-volume') ?? '1.0';
+    sfxVolumeValue.textContent = parseFloat(sfxVolumeSlider.value).toFixed(1);
     controls.lock();
+    if (isMobile && mobileControls) {
+      controls.lock(); // sets mobileActive = true
+    }
   };
 
   // 7. Loop
@@ -707,10 +862,10 @@ const init = async () => {
     audio.resume(); // Unblock AudioContext after first user gesture
     if (!gameStarted) return;
     // Check UI state
-    if (pauseOpen || dialogueUI.isOpen || clueTracker.isOpen || levelUpUI.isOpen || powerPopupOpen || playerState.isDead) return;
+    if (pauseOpen || dialogueUI.isOpen || clueTracker.isOpen || levelUpUI.isOpen || powerPopupOpen || playerState.isDead || innUI.isOpen || banditTradeUI.isOpen) return;
 
     // RMB — Protection Aura (Earth Temple)
-    if (e.button === 2 && playerState.templesCompleted.includes('earth') && document.pointerLockElement && !playerState.isDead) {
+    if (e.button === 2 && playerState.templesCompleted.includes('earth') && controls.isActive && !playerState.isDead) {
       auraActive = true;
       auraOverlay.style.display = 'block';
       return;
@@ -720,7 +875,7 @@ const init = async () => {
     if (auraActive) return;
 
     // Check if we have ANY pointer lock (don't care if body or canvas)
-    if (document.pointerLockElement && !attackState.isAttacking && !playerState.isDead) {
+    if (controls.isActive && !attackState.isAttacking && !playerState.isDead) {
       // SLASH (Cooldown tracking)
       attackState.isAttacking = true;
       attackState.timer = 0.3; // 300ms cooldown
@@ -747,7 +902,7 @@ const init = async () => {
         (newProj as any).damage = playerState.strength;
       }
     } else {
-      if (!document.pointerLockElement) {
+      if (!controls.isActive) {
         controls.lock();
       }
     }
@@ -786,7 +941,7 @@ const init = async () => {
     }
     const xpNeeded = prog.xpCurve[playerState.level - 1];
     if (playerState.xp >= xpNeeded) {
-      display.innerText = `Press F to Level Up!`;
+      display.innerText = isMobile ? 'TAP TO LEVEL UP!' : `Press F to Level Up!`;
       display.style.color = '#00ff00';
       display.style.animation = 'pulse 1s infinite alternate';
     } else {
@@ -946,6 +1101,7 @@ const init = async () => {
         killerEl.textContent = killerName ? `Killed by a ${killerName}` : '';
       }
       controls.unlock();
+      if (isMobile) minimap.toggle(false);
       showDeathScreen();
     }
   });
@@ -989,6 +1145,7 @@ const init = async () => {
     }
     updateXPUI();
   };
+  levelUpUI.onClose = () => { controls.lock(); };
 
   window.addEventListener('entityKilled', (e: any) => {
     const entityData = e.detail;
@@ -1003,6 +1160,9 @@ const init = async () => {
       clueTracker.showResultModal(true);
       return;
     }
+
+    // Harvestable entities — resource handled by onEntityKilled; skip XP/task/kill-all
+    if (entityData.type === 'plant' || entityData.type === 'tree') return;
 
     // 1. Task Check
     if (playerState.activeTask && !playerState.activeTask.isCompleted) {
@@ -1038,6 +1198,7 @@ const init = async () => {
     if (!worldCleared && !inDemonArena && currentWorldData?.type !== 'temple') {
       const remainingEnemies = entityManager.activeEntities.filter(
         e => e.data.type !== 'person' && e.data.type !== 'chest' && e.data.type !== 'chest_temple'
+          && e.data.type !== 'plant' && e.data.type !== 'tree'
       );
       if (remainingEnemies.length === 0) {
         worldCleared = true;
@@ -1056,7 +1217,6 @@ const init = async () => {
 
     // 5. Temple cleared — reveal chest when all temple enemies are dead
     if (!worldCleared && currentWorldData?.type === 'temple') {
-      const TEMPLE_ENEMY_TYPES = ['bee', 'man_eater_flower', 'arachne', 'eyeball', 'fire_skull'];
       const remainingTempleEnemies = entityManager.activeEntities.filter(
         e => TEMPLE_ENEMY_TYPES.includes(e.data.type)
       );
@@ -1123,12 +1283,12 @@ const init = async () => {
         return Dialogue.powers.musicianMinions(minionCount);
       }
       case 'Barber': {
-        const otherTownPeople = allPeople.filter((p: Person) => p.attributes.townId !== currentTownId && !p.hasMet);
-        if (otherTownPeople.length === 0) return Dialogue.powers.introduceOneNone;
-        const pick = otherTownPeople[Math.floor(Math.random() * otherTownPeople.length)];
-        introducePerson(pick);
-        const otherTownName = playerState.towns.find((t: any) => t.id === pick.attributes.townId)?.name || pick.attributes.townId;
-        return Dialogue.powers.introduceOneFromTown(pick.name, otherTownName);
+        // Barber now does what Merchant used to: introduce some people from anywhere
+        const unmet = allPeople.filter((p: Person) => !p.hasMet && p.id !== person.id);
+        const count = Math.min(Math.floor(Math.random() * 5) + 1, unmet.length);
+        const shuffled = unmet.sort(() => Math.random() - 0.5).slice(0, count);
+        shuffled.forEach(introducePerson);
+        return Dialogue.powers.introduceMultiple(count);
       }
       case 'Tailor': {
         const townPeople = allPeople.filter((p: Person) => p.attributes.townId === currentTownId);
@@ -1140,16 +1300,15 @@ const init = async () => {
         return clueText;
       }
       case 'Mayor': {
-        const townPeople = allPeople.filter((p: Person) => p.attributes.townId === currentTownId && p.id !== person.id);
-        townPeople.forEach(introducePerson);
-        return Dialogue.powers.mayorIntroduced;
+        playerState.resources.gold++;
+        showResourcePickup('gold', playerState.resources.gold);
+        return Dialogue.powers.mayorGold;
       }
       case 'Merchant': {
-        const unmet = allPeople.filter((p: Person) => !p.hasMet && p.id !== person.id);
-        const count = Math.min(Math.floor(Math.random() * 5) + 1, unmet.length);
-        const shuffled = unmet.sort(() => Math.random() - 0.5).slice(0, count);
-        shuffled.forEach(introducePerson);
-        return Dialogue.powers.introduceMultiple(count);
+        // Merchant now gives 50 shuckles
+        playerState.shuckles += 50;
+        showResourcePickup('shuckles', playerState.shuckles);
+        return Dialogue.powers.merchantShuckles;
       }
       case 'Soldier': {
         playerState.xp += 20;
@@ -1182,15 +1341,9 @@ const init = async () => {
         addClue({ text: clueText, isGood: false });
         return clueText;
       }
-      case 'Baker': {
-        const townPeople = allPeople.filter((p: Person) =>
-          p.attributes.townId === currentTownId && !p.isDemon && p.id !== person.id
-        );
-        if (townPeople.length === 0) return Dialogue.powers.bakerNone;
-        const pick = townPeople[Math.floor(Math.random() * townPeople.length)];
-        const clueText = Dialogue.powers.bakerInnocent(pick.name);
-        addClue({ text: clueText, isGood: false, isSpecial: true });
-        return clueText;
+      case 'Locksmith': {
+        playerState.hasLocksmithPower = true;
+        return Dialogue.powers.locksimthUnlock;
       }
       default:
         return Dialogue.powers.fallback;
@@ -1206,6 +1359,7 @@ const init = async () => {
     playerState.activeTask = null; // Clear active task
     person.taskCompleted = true; // Permanently mark as completed
     person.task.isCompleted = true; // Also mark the task itself as completed
+    if (person.isMinion) audio.playSound('/sounds/minion-cackle.ogg');
 
     if (rewardChoice === 'CLUE') {
       // Grant Clue (Good AND Bad)
@@ -1220,6 +1374,7 @@ const init = async () => {
 
   // Close Handler
   dialogueUI.onClose = () => {
+    if (isMobile) minimap.toggle(true);
     controls.lock();
   };
 
@@ -1264,9 +1419,96 @@ const init = async () => {
 
   // --- MINIMAP ---
   const minimap = new MinimapUI();
+  if (isMobile) minimap.repositionForMobile();
 
   // --- CLUE TRACKER ---
   const clueTracker = new ClueTrackerUI(assetManager);
+
+  // --- INN UI ---
+  const innUI = new InnUI();
+  innUI.onSleep = () => {
+    if (playerState.shuckles < 5) { showNotif(Dialogue.inn.notEnoughShuckles); return; }
+    playerState.shuckles -= 5;
+    playerState.hp = playerState.maxHp;
+    updateHealthUI();
+    audio.playSound('/sounds/player_rest.wav');
+    showNotif(Dialogue.inn.sleptWell);
+  };
+  innUI.onTrain = () => {
+    if (playerState.shuckles < 50) { showNotif(Dialogue.inn.notEnoughShuckles); return; }
+    playerState.shuckles -= 50;
+    audio.playSound('/sounds/player_train.wav');
+    playerState.xp += 20;
+    const prog = gameConfig.playerProgression;
+    if (playerState.level < prog.maxLevel) {
+      const xpNeeded = prog.xpCurve[playerState.level - 1];
+      if (playerState.xp >= xpNeeded && !playerState.canLevelUp) {
+        playerState.canLevelUp = true;
+      }
+    }
+    updateXPUI();
+    showNotif(Dialogue.inn.trained);
+  };
+  innUI.onBuy = (resource) => {
+    const mult = (currentWorldData as any)?.priceMultipliers?.[resource] ?? 1;
+    const sellPrice = (RESOURCE_BASE_VALUE[resource] ?? 1) * mult;
+    const buyPrice = Math.ceil(sellPrice * 1.5);
+    const townId = (currentWorldData as any)?.customId ?? '';
+    if (playerState.shuckles < buyPrice) return;
+    playerState.shuckles -= buyPrice;
+    (playerState.resources as Record<string, number>)[resource] = ((playerState.resources as Record<string, number>)[resource] ?? 0) + 1;
+    if (playerState.innStocks[townId]) playerState.innStocks[townId][resource] = Math.max(0, (playerState.innStocks[townId][resource] ?? 0) - 1);
+    showResourcePickup(resource, (playerState.resources as Record<string, number>)[resource]);
+  };
+  innUI.onSell = (resource) => {
+    const mult = (currentWorldData as any)?.priceMultipliers?.[resource] ?? 1;
+    const sellPrice = (RESOURCE_BASE_VALUE[resource] ?? 1) * mult;
+    const townId = (currentWorldData as any)?.customId ?? '';
+    if (((playerState.resources as Record<string, number>)[resource] ?? 0) <= 0) return;
+    (playerState.resources as Record<string, number>)[resource]--;
+    playerState.shuckles += sellPrice;
+    if (playerState.innStocks[townId]) playerState.innStocks[townId][resource] = (playerState.innStocks[townId][resource] ?? 0) + 1;
+    showResourcePickup('shuckles', playerState.shuckles);
+  };
+  innUI.onEscort = async (townId) => {
+    if (playerState.shuckles < 50) { showNotif(Dialogue.inn.notEnoughShuckles); return; }
+    playerState.shuckles -= 50;
+    try {
+      const res = await apiFetch(`${API_BASE}/api/enter/${townId}`, { method: 'POST' });
+      const newWorld = await res.json();
+      await loadWorld(newWorld);
+    } catch (err) {
+      console.error('Escort failed:', err);
+    }
+  };
+  innUI.onClose = () => { controls.autoLock = true; controls.lock(); };
+
+  // --- BANDIT TRADE UI ---
+  const banditTradeUI = new BanditTradeUI();
+  banditTradeUI.onBuy = (item) => {
+    if (item === 'bomb') {
+      if (playerState.shuckles < 10) return false;
+      playerState.shuckles -= 10;
+      playerState.bombs++;
+      showResourcePickup('bombs', playerState.bombs);
+      return true;
+    } else {
+      if (playerState.shuckles < 200) return false;
+      playerState.shuckles -= 200;
+      playerState.lockpicks++;
+      showResourcePickup('lockpicks', playerState.lockpicks);
+      return true;
+    }
+  };
+  let banditEntityName: string | null = null;
+  banditTradeUI.onClose = (purchased) => {
+    controls.autoLock = true;
+    controls.lock();
+    if (purchased && banditEntityName) {
+      entityManager.removeEntityByName(banditEntityName);
+      banditEntityName = null;
+    }
+  };
 
   // --- DEMON ARENA ---
   const generateDemonArena = () => {
@@ -1321,8 +1563,8 @@ const init = async () => {
         x: centreX,
         y: centreZ,
         properties: {
-          hp: playerState.strength * 15,
-          maxHp: playerState.strength * 15,
+          hp: Math.max(1, 20 - playerState.demonBindings.length * 3) * playerState.strength,
+          maxHp: Math.max(1, 20 - playerState.demonBindings.length * 3) * playerState.strength,
           phase2Done: false,
           attackTimer: 0,
           backTimer: 0,
@@ -1447,6 +1689,15 @@ const init = async () => {
       cheatOutput.innerText = '+100 XP';
       closeCheat();
 
+    } else if (cmd === 'strange') {
+      const allTemples = ['sky', 'earth', 'space', 'light', 'fire'];
+      allTemples.forEach(t => {
+        if (!playerState.templesCompleted.includes(t)) playerState.templesCompleted.push(t);
+      });
+      updatePauseItems();
+      cheatOutput.innerText = 'All magic items granted.';
+      closeCheat();
+
     } else {
       cheatOutput.innerText = `Unknown command: ${cmd}`;
     }
@@ -1485,12 +1736,20 @@ const init = async () => {
     }
 
     // --- TEMPLE POWER KEYS ---
-    const locked = !!document.pointerLockElement;
+    const locked = controls.isActive;
     const canUsePower = locked && !playerState.isDead && !dialogueUI.isOpen && !clueTracker.isOpen && !levelUpUI.isOpen && gameStarted;
 
     // Q — Winged Boots (Sky Temple): toggle fly
     if (e.code === 'KeyQ' && canUsePower && playerState.templesCompleted.includes('sky')) {
-      playerFly.flyTarget = playerFly.flyTarget > 0 ? 0 : 6;
+      if (playerFly.flyTarget > 0) {
+        // Only land if not hovering over a rock wall
+        const gx = Math.floor(renderer.camera.position.x / 2);
+        const gz = Math.floor(renderer.camera.position.z / 2);
+        const onRock = (currentWorldData as any)?.rockWalls?.[gx]?.[gz];
+        if (!onRock) playerFly.flyTarget = 0;
+      } else {
+        playerFly.flyTarget = 6;
+      }
     }
 
     // X — Teleportation Cape (Space Temple): open town list
@@ -1526,17 +1785,25 @@ const init = async () => {
       }
     }
 
-    // Z — Fire Bomb (Fire Temple): place bomb (overworld only, 1 at a time)
-    if (e.code === 'KeyZ' && canUsePower && playerState.templesCompleted.includes('fire')
-      && !activeBomb && currentWorldData?.type === 'world') {
-      const bx = renderer.camera.position.x;
-      const bz = renderer.camera.position.z;
-      const bombGeom = new THREE.SphereGeometry(0.35, 8, 8);
-      const bombMat = new THREE.MeshBasicMaterial({ color: 0xff6600 });
-      const bombMesh = new THREE.Mesh(bombGeom, bombMat);
-      bombMesh.position.set(bx, 0.35, bz);
-      scene.add(bombMesh);
-      activeBomb = { mesh: bombMesh, timer: 3.0, wx: bx, wz: bz };
+    // Z — Place bomb (overworld only, 1 at a time)
+    // Uses single-use bombs first; falls back to fire-temple free bomb ability
+    if (e.code === 'KeyZ' && canUsePower && !activeBomb && currentWorldData?.type === 'world') {
+      const canUseFire = playerState.templesCompleted.includes('fire');
+      const hasSingleUseBomb = playerState.bombs > 0;
+      if (canUseFire || hasSingleUseBomb) {
+        if (!canUseFire && hasSingleUseBomb) {
+          playerState.bombs--;
+          showResourcePickup('bombs', playerState.bombs);
+        }
+        const bx = renderer.camera.position.x;
+        const bz = renderer.camera.position.z;
+        const bombSpriteMat = new THREE.SpriteMaterial({ map: assetManager.getTexture('magic_bomb_unlit') });
+        const bombSprite = new THREE.Sprite(bombSpriteMat);
+        bombSprite.scale.set(1, 1, 1);
+        bombSprite.position.set(bx, 0.5, bz);
+        scene.add(bombSprite);
+        activeBomb = { sprite: bombSprite, timer: 3.0, wx: bx, wz: bz };
+      }
     }
 
     if (e.code === 'KeyC') {
@@ -1569,10 +1836,148 @@ const init = async () => {
           people_count: knownPeople.length,
         });
         flushEvents();
-        clueTracker.show(knownPeople, playerState.knownClues, playerState.items, playerState.towns, playerState.activeTask, onSelectTask, currentWorldId);
+        clueTracker.show(knownPeople, playerState.knownClues, playerState.items, playerState.towns, playerState.activeTask, onSelectTask, currentWorldId, playerState.demonBindings, playerState.suspectedPeople, playerState.towns.length * 2);
       }
     }
   });
+
+  // --- MOBILE CONTROLS SETUP ---
+  if (isMobile) {
+    mobileControls = new MobileControls(controls);
+
+    mobileControls.onInteract = () => { controls.checkInteraction(); };
+
+    mobileControls.onAttack = () => {
+      if (attackState.isAttacking || playerState.isDead) return;
+      attackState.isAttacking = true;
+      attackState.timer = 0.3;
+      audio.playSound('/sounds/player_slash.wav');
+      const pPos = renderer.camera.position.clone();
+      const dir = new THREE.Vector3();
+      renderer.camera.getWorldDirection(dir);
+      dir.normalize();
+      entityManager.spawnProjectile(
+        pPos.x + dir.x * 1.5,
+        pPos.z + dir.z * 1.5,
+        dir, 'slash', true, playerState.range, pPos.y - 1.0
+      );
+      const newProj = entityManager.projectiles[entityManager.projectiles.length - 1];
+      if (newProj && newProj.isPlayer) (newProj as any).damage = playerState.strength;
+      trackEvent('player_attacked');
+    };
+
+    mobileControls.onClueTracker = () => {
+      const knownPeople = Array.from(playerState.visitedPeople.values());
+      if (clueTracker.isOpen) {
+        clueTracker.hide();
+        minimap.toggle(true);
+        controls.lock();
+      } else {
+        controls.unlock();
+        minimap.toggle(false);
+        const onSelectTask = (task: GameTask) => {
+          playerState.activeTask = task;
+          updateTaskHud();
+          if (task.type === 'FIND_ITEM' && playerState.templesCompleted.includes(task.targetId)) {
+            task.currentAmount = 1;
+            task.isCompleted = true;
+            updateTaskHud();
+          }
+        };
+        const currentWorldId = currentWorldData ? (currentWorldData.customId || currentWorldData.id || '').toString() : '';
+        clueTracker.show(knownPeople, playerState.knownClues, playerState.items, playerState.towns, playerState.activeTask, onSelectTask, currentWorldId, playerState.demonBindings, playerState.suspectedPeople, playerState.towns.length * 2);
+      }
+    };
+
+    mobileControls.onBomb = () => {
+      if (!controls.isActive || playerState.isDead || activeBomb || currentWorldData?.type !== 'world') return;
+      const canUseFire = playerState.templesCompleted.includes('fire');
+      const hasSingleUseBomb = playerState.bombs > 0;
+      if (canUseFire || hasSingleUseBomb) {
+        if (!canUseFire && hasSingleUseBomb) {
+          playerState.bombs--;
+          showResourcePickup('bombs', playerState.bombs);
+        }
+        const bx = renderer.camera.position.x;
+        const bz = renderer.camera.position.z;
+        const bombSpriteMat = new THREE.SpriteMaterial({ map: assetManager.getTexture('magic_bomb_unlit') });
+        const bombSprite = new THREE.Sprite(bombSpriteMat);
+        bombSprite.scale.set(1, 1, 1);
+        bombSprite.position.set(bx, 0.5, bz);
+        scene.add(bombSprite);
+        activeBomb = { sprite: bombSprite, timer: 3.0, wx: bx, wz: bz };
+      }
+    };
+
+    mobileControls.onFly = () => {
+      if (!controls.isActive || playerState.isDead || !playerState.templesCompleted.includes('sky')) return;
+      if (playerFly.flyTarget > 0) {
+        const gx = Math.floor(renderer.camera.position.x / 2);
+        const gz = Math.floor(renderer.camera.position.z / 2);
+        const onRock = (currentWorldData as any)?.rockWalls?.[gx]?.[gz];
+        if (!onRock) playerFly.flyTarget = 0;
+      } else {
+        playerFly.flyTarget = 6;
+      }
+    };
+
+    mobileControls.onPause = () => { controls.unlock(); };
+
+    mobileControls.onTeleport = () => {
+      if (!controls.isActive || playerState.isDead || !playerState.templesCompleted.includes('space')) return;
+      const towns = (playerState.towns as any[]).filter(t => playerState.visitedTownIds.includes(t.id));
+      if (towns.length > 0) {
+        controls.unlock();
+        teleportList.innerHTML = '';
+        towns.forEach((t: any) => {
+          const btn = document.createElement('button');
+          btn.innerText = t.name ?? t.id;
+          Object.assign(btn.style, {
+            padding: '8px 12px', background: '#222', color: '#ffd700',
+            border: '1px solid #555', cursor: 'pointer', fontFamily: 'inherit',
+            fontSize: '0.75em'
+          });
+          btn.onmouseover = () => (btn.style.background = '#444');
+          btn.onmouseout = () => (btn.style.background = '#222');
+          btn.onclick = async () => {
+            teleportMenu.style.display = 'none';
+            try {
+              const res = await apiFetch(`${API_BASE}/api/enter/${t.id}`, { method: 'POST' });
+              const townData = await res.json();
+              await loadWorld(townData);
+              playerState.hp = playerState.maxHp;
+              updateHealthUI();
+            } catch (err) { console.error('Teleport failed:', err); }
+            controls.lock();
+          };
+          teleportList.appendChild(btn);
+        });
+        teleportMenu.style.display = 'flex';
+      }
+    };
+
+    mobileControls.onLevelUp = () => {
+      if (!playerState.canLevelUp) return;
+      if (levelUpUI.isOpen) {
+        levelUpUI.hide();
+        controls.lock();
+      } else {
+        controls.unlock();
+        levelUpUI.show(playerState.level + 1, playerState, gameConfig.playerProgression.stats);
+      }
+    };
+
+    // Make xp-display tappable for level up
+    const xpDisplay = document.getElementById('xp-display');
+    if (xpDisplay) {
+      xpDisplay.addEventListener('touchstart', (e) => {
+        if (playerState.canLevelUp) {
+          e.preventDefault();
+          mobileControls!.onLevelUp?.();
+        }
+      }, { passive: false });
+    }
+  }
 
   let musicPaused = false;
 
@@ -1607,29 +2012,38 @@ const init = async () => {
         currentWorldData.walls || null,
         chestMarker,
         currentWorldData.type === 'temple',
-        playerFacingAngle
+        playerFacingAngle,
+        playerState.suspectedPeople,
+        currentWorldData.housePeople
       );
     }
 
     const pauseScreen = document.getElementById('pause-screen');
-    const isLocked = document.pointerLockElement !== null;
-    const isPauseScreen = gameStarted && !isLocked && !playerState.isDead && !dialogueUI.isOpen && !clueTracker.isOpen && !levelUpUI.isOpen && !powerPopupOpen;
+    const isLocked = controls.isActive;
+    const isPauseScreen = gameStarted && !isLocked && !playerState.isDead && !dialogueUI.isOpen && !clueTracker.isOpen && !levelUpUI.isOpen && !powerPopupOpen && !innUI.isOpen && !banditTradeUI.isOpen;
 
     // Pause / resume music when the pause screen appears or disappears
     if (isPauseScreen && !musicPaused) {
       audio.pauseMusic();
       musicPaused = true;
       pauseOpen = true;
+      if (isMobile) minimap.toggle(false);
       trackEvent('pause_opened');
       flushEvents();
-      showPauseTab('settings'); // Always open to Settings tab
+      showPauseTab(lastPauseTab);
     } else if (!isPauseScreen && musicPaused) {
       audio.resumeMusic();
       musicPaused = false;
       pauseOpen = false;
+      if (isMobile) minimap.toggle(true);
     }
 
-    if (dialogueUI.isOpen || clueTracker.isOpen || levelUpUI.isOpen || powerPopupOpen) {
+    // Hide joystick whenever any modal is blocking input
+    if (isMobile && mobileControls) {
+      mobileControls.setJoystickVisible(isLocked);
+    }
+
+    if (dialogueUI.isOpen || clueTracker.isOpen || levelUpUI.isOpen || powerPopupOpen || innUI.isOpen || banditTradeUI.isOpen) {
       // DIALOGUE MODE: Logic Paused, Cursor Free, UI Visible
       if (pauseScreen) pauseScreen.style.display = 'none';
 
@@ -1650,30 +2064,42 @@ const init = async () => {
     // 1. Controls
     if (!playerState.isDead) controls.update(delta, playerState.agility);
 
+    if (isMobile && mobileControls) {
+      mobileControls.applyLook(renderer.camera);
+      mobileControls.updateState(
+        playerState.templesCompleted.includes('sky'),
+        playerState.templesCompleted.includes('space'),
+        playerState.canLevelUp
+      );
+    }
+
     // Winged Boots (Sky Temple): smoothly interpolate camera height
     if (playerState.templesCompleted.includes('sky')) {
       playerFly.flyY += (playerFly.flyTarget - playerFly.flyY) * Math.min(delta * 5, 1);
       renderer.camera.position.y = 2 + playerFly.flyY;
+      controls.isFlying = playerFly.flyY > 0.5;
     }
 
     // Fire Bomb countdown
     if (activeBomb) {
       activeBomb.timer -= delta;
-      // Pulse bomb color as fuse shortens
+      // Alternate lit/unlit sprite as fuse shortens
       const pulse = Math.sin(activeBomb.timer * Math.PI * (4 - activeBomb.timer)) > 0;
-      (activeBomb.mesh.material as THREE.MeshBasicMaterial).color.setHex(pulse ? 0xff6600 : 0xffcc00);
+      (activeBomb.sprite.material as THREE.SpriteMaterial).map = assetManager.getTexture(pulse ? 'magic_bomb_lit' : 'magic_bomb_unlit') ?? null;
 
       if (activeBomb.timer <= 0) {
         // Explode
         const blastCenter = new THREE.Vector3(activeBomb.wx, 1, activeBomb.wz);
-        const blastRadiusTiles = 5;
+        const blastRadiusTiles = 3;
         const blastRadiusWorld = blastRadiusTiles * 2; // tileSize = 2
+
+        audio.playSound('/sounds/bomb_blast.wav');
 
         // Damage enemies in radius
         entityManager.damageInRadius(blastCenter, blastRadiusWorld, 5);
 
-        // Destroy overworld walls in blast radius
-        if (currentWorldData?.type === 'world' && currentWorldData.walls) {
+        // Destroy rock walls in blast radius (forest walls are indestructible)
+        if (currentWorldData?.type === 'world' && currentWorldData.walls && currentWorldData.rockWalls) {
           const cx = Math.floor(activeBomb.wx / 2);
           const cz = Math.floor(activeBomb.wz / 2);
           for (let dx = -blastRadiusTiles; dx <= blastRadiusTiles; dx++) {
@@ -1681,18 +2107,53 @@ const init = async () => {
               if (Math.sqrt(dx * dx + dz * dz) <= blastRadiusTiles) {
                 const tx = cx + dx, tz = cz + dz;
                 if (tx > 0 && tx < currentWorldData.width - 1 && tz > 0 && tz < currentWorldData.height - 1) {
-                  currentWorldData.walls[tx][tz] = false;
+                  if (currentWorldData.rockWalls[tx][tz]) {
+                    currentWorldData.walls[tx][tz] = false;
+                    currentWorldData.rockWalls[tx][tz] = false;
+                  }
                 }
               }
             }
           }
+          // Rock wall ore drops
+          const oreRoll = Math.random();
+          if (oreRoll < 0.10) {
+            playerState.resources.gold++;
+            showResourcePickup('gold', playerState.resources.gold);
+          } else if (oreRoll < 0.50) {
+            playerState.resources.iron_ore++;
+            showResourcePickup('iron_ore', playerState.resources.iron_ore);
+          }
+
           // Rebuild level geometry with updated walls
           builder.clear();
           builder.build(currentWorldData);
         }
 
-        scene.remove(activeBomb.mesh);
+        // Start explosion animation
+        if (activeExplosion) { scene.remove(activeExplosion.sprite); }
+        const exMat = new THREE.SpriteMaterial({ map: assetManager.getTexture('explosion_0'), transparent: true });
+        const exSprite = new THREE.Sprite(exMat);
+        exSprite.scale.set(6, 6, 6);
+        exSprite.position.set(activeBomb.wx, 3, activeBomb.wz);
+        scene.add(exSprite);
+        activeExplosion = { sprite: exSprite, frame: 0, elapsed: 0 };
+
+        scene.remove(activeBomb.sprite);
         activeBomb = null;
+      }
+    }
+
+    // Explosion animation
+    if (activeExplosion) {
+      activeExplosion.elapsed += delta;
+      const frame = Math.floor(activeExplosion.elapsed / EXPLOSION_FRAME_TIME);
+      if (frame >= EXPLOSION_FRAMES) {
+        scene.remove(activeExplosion.sprite);
+        activeExplosion = null;
+      } else if (frame !== activeExplosion.frame) {
+        activeExplosion.frame = frame;
+        (activeExplosion.sprite.material as THREE.SpriteMaterial).map = assetManager.getTexture(`explosion_${frame}`) ?? null;
       }
     }
 
@@ -1732,7 +2193,6 @@ const init = async () => {
 
     // Fallback temple-clear check — catches cases where entityKilled didn't trigger the reveal
     if (!worldCleared && currentWorldData?.type === 'temple') {
-      const TEMPLE_ENEMY_TYPES = ['bee', 'man_eater_flower', 'arachne', 'eyeball', 'fire_skull'];
       const hasEnemies = entityManager.activeEntities.some(e => TEMPLE_ENEMY_TYPES.includes(e.data.type));
       if (!hasEnemies) {
         worldCleared = true;
@@ -1752,6 +2212,11 @@ const init = async () => {
 
   // Interaction Listener
   window.addEventListener('playerInteract', async (e: any) => {
+    // E key while inn open → close
+    if (innUI.isOpen) {
+      innUI.hide();
+      return;
+    }
     // E key while power popup open → dismiss
     if (powerPopupOpen) {
       hidePowerPopup();
@@ -1762,7 +2227,41 @@ const init = async () => {
       dialogueUI.hide();
       return;
     }
+    // Pending lockpick confirmation: E pressed again to confirm use
+    if (pendingLockpickPersonId) {
+      const pId = pendingLockpickPersonId;
+      pendingLockpickPersonId = null;
+      playerState.lockpicks--;
+      playerState.unlockedHouses.add(pId);
+      showResourcePickup('lockpicks', playerState.lockpicks);
+      const allPeople = playerState.towns.flatMap((t: any) => t.people ?? []);
+      const owner = allPeople.find((p: any) => p.id === pId);
+      if (owner?.isMinion) {
+        const names: string[] = gameConfig.bindingNameRegistry ?? [];
+        const nextName = names[playerState.demonBindings.length] ?? `Demon Binding ${playerState.demonBindings.length + 1}`;
+        playerState.demonBindings.push(nextName);
+        audio.playSound('/sounds/binding_found.wav');
+        showNotif(Dialogue.house.binding, 3000);
+      } else {
+        showNotif(Dialogue.house.empty);
+      }
+      return;
+    }
     const playerPos = e.detail.position;
+
+    // 0. Check for Bandit (chick) — trade before NPC dialogue
+    const nearbyChick = entityManager.activeEntities.find(en => {
+      if (en.data.type !== 'chick') return false;
+      if (en.data.properties.attacked) return false; // already attacked, no trade
+      return en.sprite.position.distanceTo(playerPos) < 2.5;
+    });
+    if (nearbyChick) {
+      banditEntityName = nearbyChick.data.name;
+      controls.autoLock = false;
+      controls.unlock();
+      banditTradeUI.show(() => playerState.shuckles);
+      return;
+    }
 
     // 1. Check for NPCs
     const npcEntity = entityManager.checkForInteraction(playerPos);
@@ -1800,6 +2299,7 @@ const init = async () => {
 
       trackEvent('npc_dialogue_opened', { person_id: person.id, person_name: person.name });
       const hasEyeOfTruth = playerState.templesCompleted.includes('light');
+      if (isMobile) minimap.toggle(false);
       dialogueUI.show(person, playerState.activeTask, playerState.items, playerState.towns, hasEyeOfTruth);
       return;
     }
@@ -1829,41 +2329,105 @@ const init = async () => {
       }
     }
 
-    // 3. Check for Doors
+    // 3. Check for Signs and Doors
     if (currentWorldData && currentWorldData.doors) {
-      const startX = playerPos.x / 2; // tileSize 2
+      const startX = playerPos.x / 2;
       const startY = playerPos.z / 2;
 
+      // 3a. Portal / Inn door (non-house, non-locked doors)
       const closestDoor = currentWorldData.doors.find((d: any) => {
-        // FILTER: Ignore 'house' doors (decorative only)
         if (d.type === 'house') return false;
-
         const dx = d.x - startX;
         const dy = d.y - startY;
-        return Math.sqrt(dx * dx + dy * dy) < 1.5; // Distance check
+        return Math.sqrt(dx * dx + dy * dy) < 1.5;
       });
 
       if (closestDoor) {
-        console.log("Entering door...", closestDoor);
+        if (closestDoor.type === 'inn') {
+          // Initialize inn stock on first visit for this town
+          const townId = (currentWorldData as any)?.customId ?? '';
+          const priceMultipliers = (currentWorldData as any)?.priceMultipliers ?? {};
+          if (!playerState.innStocks[townId]) {
+            playerState.innStocks[townId] = {};
+            for (const [r, mult] of Object.entries(priceMultipliers)) {
+              playerState.innStocks[townId][r] = (7 - (mult as number)) * 10;
+            }
+          }
+          controls.autoLock = false;
+          controls.unlock();
+          innUI.show(
+            priceMultipliers,
+            playerState.innStocks[townId] ?? {},
+            playerState.resources as Record<string, number>,
+            () => playerState.shuckles,
+            playerState.towns,
+            () => playerState.hp,
+            playerState.maxHp,
+          );
+          return;
+        }
+        // Normal portal door — enter new world
         try {
-          // Enter Door
           const res = await apiFetch(`${API_BASE}/api/enter/${closestDoor.id}`, { method: 'POST' });
           const newWorld = await res.json();
-
-          // LOAD NEW WORLD WITHOUT RELOAD
           await loadWorld(newWorld);
           flushEvents();
-
-          // Refill HP only when entering a town
-          const enteredTown = newWorld.type === 'city' || String(newWorld.customId || '').startsWith('town_');
-          if (enteredTown) {
-            playerState.hp = playerState.maxHp;
-            updateHealthUI();
-          }
-
         } catch (err) {
           console.error(err);
         }
+        return;
+      }
+
+      // 3b. House door interaction (locked / unlock / search) — checked before signs
+      const houseDoor = currentWorldData.doors.find((d: any) => {
+        if (d.type !== 'house') return false;
+        const dx = d.x - startX;
+        const dy = d.y - startY;
+        return Math.sqrt(dx * dx + dy * dy) < 1.5;
+      });
+
+      if (houseDoor && currentWorldData.housePeople) {
+        const personId = currentWorldData.housePeople[houseDoor.id];
+        if (!personId) { showNotif(Dialogue.house.locked); return; }
+
+        if (playerState.unlockedHouses.has(personId)) {
+          showNotif(Dialogue.house.searched);
+        } else if (playerState.hasLocksmithPower) {
+          playerState.unlockedHouses.add(personId);
+          playerState.hasLocksmithPower = false;
+          const allPeople = playerState.towns.flatMap((t: any) => t.people ?? []);
+          const owner = allPeople.find((p: any) => p.id === personId);
+          if (owner?.isMinion) {
+            const names: string[] = gameConfig.bindingNameRegistry ?? [];
+            const nextName = names[playerState.demonBindings.length] ?? `Demon Binding ${playerState.demonBindings.length + 1}`;
+            playerState.demonBindings.push(nextName);
+            audio.playSound('/sounds/binding_found.wav');
+            showNotif(Dialogue.house.binding, 3000);
+          } else {
+            showNotif(Dialogue.house.empty);
+          }
+        } else if (playerState.lockpicks > 0) {
+          pendingLockpickPersonId = personId;
+          showNotif(Dialogue.house.useLockpick, 3000);
+        } else {
+          showNotif(Dialogue.house.locked);
+        }
+        return;
+      }
+
+      // 3c. Sign check — only fires when not near any door
+      const signEntry = builder.signSprites.find(({ sprite }) => {
+        const sx = sprite.position.x / 2;
+        const sz = sprite.position.z / 2;
+        const dx = sx - startX;
+        const dz = sz - startY;
+        return Math.sqrt(dx * dx + dz * dz) < 1.5;
+      });
+      if (signEntry) {
+        const allPeople = playerState.towns.flatMap((t: any) => t.people ?? []);
+        const owner = allPeople.find((p: any) => p.id === signEntry.personId);
+        if (owner) showNotif(Dialogue.house.sign(owner.name));
+        return;
       }
     }
   });
