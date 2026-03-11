@@ -22,6 +22,8 @@ import { BanditTradeUI } from './ui/BanditTradeUI';
 import { HOW_TO_HTML } from './ui/howToContent';
 import { trackEvent, flushEvents } from './analytics';
 
+window.addEventListener('beforeunload', flushEvents);
+
 // --- PLAYER STATE ---
 const playerState = {
   level: 1,
@@ -54,6 +56,7 @@ const playerState = {
 };
 
 let gameConfig: any;
+let gameStartTime = 0;
 let inDemonArena = false;
 let worldCleared = false;
 const arenaSize = { w: 30, h: 30 };
@@ -816,6 +819,7 @@ const init = async () => {
     startScreen.hide();
     audio.resume();
     audio.playMusic(pendingMusicTrack);
+    gameStartTime = Date.now();
     trackEvent('game_started', {
       sensitivity: parseFloat(localStorage.getItem('sensitivity') ?? '1.0'),
       volume: parseFloat(localStorage.getItem('volume') ?? '1.0'),
@@ -1092,6 +1096,7 @@ const init = async () => {
         level: playerState.level,
         xp: playerState.xp,
         location_id: (currentWorldData?.customId ?? currentWorldData?.id ?? 'unknown').toString(),
+        session_duration_s: gameStartTime ? Math.round((Date.now() - gameStartTime) / 1000) : 0,
       });
       const killerEl = document.getElementById('death-killer');
       if (killerEl) {
@@ -1156,7 +1161,7 @@ const init = async () => {
       playerState.isDead = true;  // stops movement and blocks further damage
       controls.unlock();           // releases pointer lock so the modal is clickable
       entityManager.clearEnemies(); // instantly remove remaining arena minions
-      trackEvent('game_won', { level: playerState.level, xp: playerState.xp });
+      trackEvent('game_won', { level: playerState.level, xp: playerState.xp, session_duration_s: gameStartTime ? Math.round((Date.now() - gameStartTime) / 1000) : 0 });
       clueTracker.showResultModal(true);
       return;
     }

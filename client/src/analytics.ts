@@ -6,7 +6,7 @@ type EventEntry = { name: string; params?: Record<string, string | number | bool
 const queue: EventEntry[] = [];
 
 export function trackEvent(name: string, params?: Record<string, string | number | boolean>) {
-    if (enabled) queue.push({ name, params, timestamp: Date.now() });
+    if (enabled) queue.push({ name, params: { $current_url: location.href, ...params }, timestamp: Date.now() });
 }
 
 export function flushEvents() {

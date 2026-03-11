@@ -29,7 +29,7 @@ const getSessionId = (req: Request): string =>
     (req.headers['x-session-id'] as string) || 'default';
 
 // --- PostHog server-side tracking ---
-const POSTHOG_API_KEY = 'phc_ErGmDjK3j1QbKEx6CBJcnY91PrZIgWPrHbA2RBtFHM5';
+const POSTHOG_API_KEY = process.env.POSTHOG_API_KEY ?? '';
 
 function track(sessionId: string, event: string, properties?: Record<string, any>) {
     // Fire-and-forget — never awaited so it never blocks a route handler
@@ -46,9 +46,7 @@ app.get('/api/config', (req, res) => {
     res.json(gameConfig);
 });
 
-// game_started — a new world is generated when a session begins
 app.get('/api/generate', (req, res, next) => {
-    track(getSessionId(req), 'game_started');
     return (generateWorld as any)(req, res, next);
 });
 
@@ -58,9 +56,7 @@ app.get('/api/state', (req, res) => {
     res.json(state || {});
 });
 
-// world_entered — player moves through a door
 app.post('/api/enter/:doorId', (req, res, next) => {
-    track(getSessionId(req), 'world_entered', { door_id: req.params.doorId });
     return (enterDoor as any)(req, res, next);
 });
 
@@ -76,10 +72,6 @@ app.post('/api/accuse', (req, res) => {
 
     const isDemon = state.demonId === personId;
 
-    // accusation_result — covers both correct and incorrect guesses
-    track(sessionId, 'accusation_result', { won: isDemon, accused_person_id: personId });
-    if (isDemon) track(sessionId, 'game_won');
-
     res.json({ success: isDemon, demonId: state.demonId });
 });
 
@@ -93,7 +85,6 @@ app.post('/api/escort/complete', (req, res) => {
     const person = allPeople.find(p => p.id === personId);
 
     if (person) {
-        track(sessionId, 'task_completed', { task_type: 'ESCORT', target_town_id: targetTownId });
         person.attributes.townId = targetTownId;
 
         // Move person from their origin town to the destination town's people array
